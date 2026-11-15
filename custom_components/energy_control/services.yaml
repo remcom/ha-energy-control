@@ -1,0 +1,41 @@
+replan:
+  fields:
+    config_entry_id:
+      selector:
+        config_entry:
+          integration: energy_control
+override:
+  fields:
+    config_entry_id:
+      selector:
+        config_entry:
+          integration: energy_control
+    action:
+      required: true
+      selector:
+        select:
+          translation_key: action
+          options:
+            - self_consume
+            - hold
+            - charge_grid
+            - discharge_grid
+    duration:
+      required: true
+      default:
+        hours: 1
+      selector:
+        duration:
+    power:
+      selector:
+        number:
+          min: 0
+          max: 50000
+          step: 50
+          unit_of_measurement: W
+clear_override:
+  fields:
+    config_entry_id:
+      selector:
+        config_entry:
+          integration: energy_control

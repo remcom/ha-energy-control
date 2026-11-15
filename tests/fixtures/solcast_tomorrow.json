@@ -1,0 +1,7 @@
+{
+  "detailedForecast": [
+    {"period_start": "2026-11-15T11:00:00+01:00", "pv_estimate": 0.4806, "pv_estimate10": 0.1262, "pv_estimate90": 1.7938},
+    {"period_start": "2026-11-15T11:30:00+01:00", "pv_estimate": 0.5162, "pv_estimate10": 0.1387, "pv_estimate90": 1.9265},
+    {"period_start": "2026-11-15T12:00:00+01:00", "pv_estimate": 0.5086, "pv_estimate10": 0.1346, "pv_estimate90": 1.91}
+  ]
+}

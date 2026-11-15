@@ -1,0 +1,334 @@
+{
+  "config": {
+    "step": {
+      "prices": {
+        "title": "Stroomprijzen",
+        "description": "Sensor met een prijsverwachting in de attributen (Tibber Prices, Nord Pool, ENTSO-e, EnergyZero, ...). Terugleververgoeding: 'saldering' (teruglevering = inkoopprijs) gaat na de einddatum over op 'spot'.",
+        "data": {
+          "price_entity": "Prijsverwachting-sensor",
+          "price_includes_taxes": "Prijzen inclusief belastingen",
+          "markup": "Opslag leverancier (alleen spotbronnen)",
+          "energy_tax": "Energiebelasting (alleen spotbronnen)",
+          "vat": "BTW (alleen spotbronnen)",
+          "export_mode": "Terugleververgoeding",
+          "netting_end": "Saldering eindigt op",
+          "export_factor": "Factor op spotprijs",
+          "export_fee": "Terugleverkosten (afgetrokken)",
+          "export_fixed": "Vaste terugleverprijs"
+        }
+      },
+      "pv": {
+        "title": "Zonneverwachting",
+        "description": "Verwachtingssensoren (Solcast dagsensoren, Forecast.Solar, Open-Meteo Solar Forecast). Alle geselecteerde sensoren worden opgeteld.",
+        "data": {
+          "pv_entities": "PV-verwachting sensoren",
+          "pv_estimate": "Solcast schatting",
+          "pv_scale": "Schaalfactor"
+        }
+      },
+      "battery": {
+        "title": "Accu",
+        "description": "Mogelijkheden van accu en omvormer.",
+        "data": {
+          "soc_entity": "Laadtoestand-sensor (%)",
+          "capacity_kwh": "Bruikbare capaciteit",
+          "max_charge_w": "Max laadvermogen",
+          "max_discharge_w": "Max ontlaadvermogen",
+          "charge_efficiency": "Laadrendement (AC naar accu)",
+          "discharge_efficiency": "Ontlaadrendement (accu naar AC)",
+          "battery_power_entity": "Accuvermogen-sensor (+ laden)"
+        }
+      },
+      "load": {
+        "title": "Verbruik & net",
+        "description": "De verbruiksverwachting gebruikt de recorder-historie van de verbruikssensor (huishoudelijke AC-belasting, zonder accu). Netvermogen-sensor: positief = afname.",
+        "data": {
+          "load_entity": "Verbruiksvermogen/-energie sensor",
+          "load_days": "Dagen historie voor verbruiksverwachting",
+          "load_fallback_w": "Standaard verbruik",
+          "grid_power_entity": "Netvermogen-sensor (+ afname)",
+          "max_import_w": "Max netafname",
+          "max_export_w": "Max teruglevering"
+        }
+      },
+      "control": {
+        "title": "Victron ESS aansturing",
+        "description": "Te sturen entiteiten (suggesties van de Victron GX-integratie zijn ingevuld). Laat het setpoint leeg voor alleen-advies. De PV-begrenzer knijpt een AC-gekoppelde omvormer af bij negatieve prijzen.",
+        "data": {
+          "setpoint_entity": "ESS net-setpoint",
+          "charge_limit_entity": "ESS max laadvermogen",
+          "discharge_limit_entity": "ESS max omvormervermogen (ontladen)",
+          "feed_in_limit_entity": "ESS max teruglevering",
+          "dess_mode_entity": "Victron Dynamic ESS modus (uit tijdens aansturing)",
+          "idle_setpoint_w": "Net-setpoint bij eigen verbruik",
+          "pv_limit_entity": "PV-omvormer vermogenslimiet",
+          "pv_limit_unit": "Eenheid PV-limiet",
+          "pv_limit_max_w": "PV-omvormer max vermogen",
+          "pv_power_entity": "PV-omvormer vermogen-sensor"
+        }
+      }
+    },
+    "error": {
+      "entity_not_found": "Entiteit niet gevonden",
+      "no_price_forecast": "Geen prijsverwachting gevonden in de attributen van deze sensor"
+    },
+    "abort": {}
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Energy Control",
+        "menu_options": {
+          "prices": "Stroomprijzen",
+          "pv": "Zonneverwachting",
+          "battery": "Accu",
+          "load": "Verbruik & net",
+          "control": "Victron ESS aansturing",
+          "save": "Opslaan en sluiten"
+        }
+      },
+      "prices": {
+        "title": "Stroomprijzen",
+        "description": "Sensor met een prijsverwachting in de attributen (Tibber Prices, Nord Pool, ENTSO-e, EnergyZero, ...). Terugleververgoeding: 'saldering' (teruglevering = inkoopprijs) gaat na de einddatum over op 'spot'.",
+        "data": {
+          "price_entity": "Prijsverwachting-sensor",
+          "price_includes_taxes": "Prijzen inclusief belastingen",
+          "markup": "Opslag leverancier (alleen spotbronnen)",
+          "energy_tax": "Energiebelasting (alleen spotbronnen)",
+          "vat": "BTW (alleen spotbronnen)",
+          "export_mode": "Terugleververgoeding",
+          "netting_end": "Saldering eindigt op",
+          "export_factor": "Factor op spotprijs",
+          "export_fee": "Terugleverkosten (afgetrokken)",
+          "export_fixed": "Vaste terugleverprijs"
+        }
+      },
+      "pv": {
+        "title": "Zonneverwachting",
+        "description": "Verwachtingssensoren (Solcast dagsensoren, Forecast.Solar, Open-Meteo Solar Forecast). Alle geselecteerde sensoren worden opgeteld.",
+        "data": {
+          "pv_entities": "PV-verwachting sensoren",
+          "pv_estimate": "Solcast schatting",
+          "pv_scale": "Schaalfactor"
+        }
+      },
+      "battery": {
+        "title": "Accu",
+        "description": "Mogelijkheden van accu en omvormer.",
+        "data": {
+          "soc_entity": "Laadtoestand-sensor (%)",
+          "capacity_kwh": "Bruikbare capaciteit",
+          "max_charge_w": "Max laadvermogen",
+          "max_discharge_w": "Max ontlaadvermogen",
+          "charge_efficiency": "Laadrendement (AC naar accu)",
+          "discharge_efficiency": "Ontlaadrendement (accu naar AC)",
+          "battery_power_entity": "Accuvermogen-sensor (+ laden)"
+        }
+      },
+      "load": {
+        "title": "Verbruik & net",
+        "description": "De verbruiksverwachting gebruikt de recorder-historie van de verbruikssensor (huishoudelijke AC-belasting, zonder accu). Netvermogen-sensor: positief = afname.",
+        "data": {
+          "load_entity": "Verbruiksvermogen/-energie sensor",
+          "load_days": "Dagen historie voor verbruiksverwachting",
+          "load_fallback_w": "Standaard verbruik",
+          "grid_power_entity": "Netvermogen-sensor (+ afname)",
+          "max_import_w": "Max netafname",
+          "max_export_w": "Max teruglevering"
+        }
+      },
+      "control": {
+        "title": "Victron ESS aansturing",
+        "description": "Te sturen entiteiten (suggesties van de Victron GX-integratie zijn ingevuld). Laat het setpoint leeg voor alleen-advies. De PV-begrenzer knijpt een AC-gekoppelde omvormer af bij negatieve prijzen.",
+        "data": {
+          "setpoint_entity": "ESS net-setpoint",
+          "charge_limit_entity": "ESS max laadvermogen",
+          "discharge_limit_entity": "ESS max omvormervermogen (ontladen)",
+          "feed_in_limit_entity": "ESS max teruglevering",
+          "dess_mode_entity": "Victron Dynamic ESS modus (uit tijdens aansturing)",
+          "idle_setpoint_w": "Net-setpoint bij eigen verbruik",
+          "pv_limit_entity": "PV-omvormer vermogenslimiet",
+          "pv_limit_unit": "Eenheid PV-limiet",
+          "pv_limit_max_w": "PV-omvormer max vermogen",
+          "pv_power_entity": "PV-omvormer vermogen-sensor"
+        }
+      }
+    },
+    "error": {
+      "entity_not_found": "Entiteit niet gevonden",
+      "no_price_forecast": "Geen prijsverwachting gevonden in de attributen van deze sensor"
+    }
+  },
+  "selector": {
+    "export_mode": {
+      "options": {
+        "netting": "Saldering (teruglevering = inkoopprijs)",
+        "spot": "Spotprijs x factor - kosten",
+        "fixed": "Vaste prijs"
+      }
+    },
+    "pv_estimate": {
+      "options": {
+        "pv_estimate": "Mediaan",
+        "pv_estimate10": "Pessimistisch (P10)",
+        "pv_estimate90": "Optimistisch (P90)"
+      }
+    },
+    "pv_limit_unit": {
+      "options": {
+        "W": "Watt",
+        "%": "Procent"
+      }
+    },
+    "action": {
+      "options": {
+        "self_consume": "Eigen verbruik",
+        "hold": "Vasthouden",
+        "charge_grid": "Laden van net",
+        "discharge_grid": "Ontladen naar net"
+      }
+    }
+  },
+  "entity": {
+    "select": {
+      "mode": {
+        "name": "Modus",
+        "state": {
+          "off": "Uit",
+          "advisory": "Advies (alleen plan)",
+          "auto": "Automatisch",
+          "self_consumption": "Eigen verbruik",
+          "force_charge": "Geforceerd laden",
+          "force_discharge": "Geforceerd ontladen",
+          "hold": "Accu vasthouden"
+        }
+      }
+    },
+    "switch": {
+      "grid_charge": {
+        "name": "Laden van net"
+      },
+      "battery_to_grid": {
+        "name": "Accu naar net (arbitrage)"
+      },
+      "curtail_negative": {
+        "name": "PV afknijpen bij negatieve prijs"
+      }
+    },
+    "number": {
+      "min_soc": {
+        "name": "Minimale SoC"
+      },
+      "max_soc": {
+        "name": "Maximale SoC"
+      },
+      "cycle_cost": {
+        "name": "Accuslijtage kosten"
+      },
+      "arbitrage_margin": {
+        "name": "Arbitragemarge"
+      }
+    },
+    "binary_sensor": {
+      "control_active": {
+        "name": "Aansturing actief"
+      },
+      "curtailing": {
+        "name": "PV afgeknepen"
+      }
+    },
+    "sensor": {
+      "action": {
+        "name": "Actie",
+        "state": {
+          "self_consume": "Eigen verbruik",
+          "hold": "Vasthouden",
+          "charge_grid": "Laden van net",
+          "discharge_grid": "Ontladen naar net"
+        }
+      },
+      "planned_grid_power": {
+        "name": "Gepland netvermogen"
+      },
+      "planned_battery_power": {
+        "name": "Gepland accuvermogen"
+      },
+      "target_soc": {
+        "name": "Doel-SoC"
+      },
+      "next_grid_charge": {
+        "name": "Volgende netlading"
+      },
+      "next_grid_discharge": {
+        "name": "Volgende netontlading"
+      },
+      "plan_cost": {
+        "name": "Geplande kosten (horizon)"
+      },
+      "plan_savings": {
+        "name": "Geplande besparing (horizon)"
+      },
+      "cost_today": {
+        "name": "Energiekosten vandaag"
+      },
+      "plan": {
+        "name": "Plan"
+      }
+    }
+  },
+  "services": {
+    "replan": {
+      "name": "Opnieuw plannen",
+      "description": "Bereken het schema nu opnieuw (ververst ook het verbruiksprofiel).",
+      "fields": {
+        "config_entry_id": {
+          "name": "Entry",
+          "description": "Energy Control entry (default: all)."
+        }
+      }
+    },
+    "override": {
+      "name": "Overschrijven",
+      "description": "Voer tijdelijk een vaste actie uit, los van het plan (alleen stuurmodi).",
+      "fields": {
+        "config_entry_id": {
+          "name": "Entry",
+          "description": "Energy Control entry (default: all)."
+        },
+        "action": {
+          "name": "Action",
+          "description": "Action to run."
+        },
+        "duration": {
+          "name": "Duration",
+          "description": "How long."
+        },
+        "power": {
+          "name": "Power",
+          "description": "Charge/discharge power (default: maximum)."
+        }
+      }
+    },
+    "clear_override": {
+      "name": "Overschrijving wissen",
+      "description": "Terug naar het plan.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Entry",
+          "description": "Energy Control entry (default: all)."
+        }
+      }
+    }
+  },
+  "issues": {
+    "control_failed": {
+      "title": "Energy Control kan de ESS niet aansturen",
+      "description": "Schrijven naar de Victron-entiteiten mislukte: {error}. Het systeem valt terug op de eigen ESS-instellingen tot dit is opgelost."
+    }
+  },
+  "exceptions": {
+    "no_entry": {
+      "message": "Geen geladen Energy Control-configuratie gevonden."
+    }
+  }
+}

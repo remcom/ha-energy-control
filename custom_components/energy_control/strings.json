@@ -1,0 +1,334 @@
+{
+  "config": {
+    "step": {
+      "prices": {
+        "title": "Electricity prices",
+        "description": "Sensor with a price forecast in its attributes (Tibber Prices, Nord Pool, ENTSO-e, EnergyZero, ...). Export compensation: 'netting' (export = import, e.g. NL saldering) switches to 'spot' after the netting end date.",
+        "data": {
+          "price_entity": "Price forecast sensor",
+          "price_includes_taxes": "Prices include taxes and fees",
+          "markup": "Supplier markup (spot-only sources)",
+          "energy_tax": "Energy tax (spot-only sources)",
+          "vat": "VAT (spot-only sources)",
+          "export_mode": "Export compensation",
+          "netting_end": "Netting (saldering) ends on",
+          "export_factor": "Export factor on spot price",
+          "export_fee": "Export fee (subtracted)",
+          "export_fixed": "Fixed export price"
+        }
+      },
+      "pv": {
+        "title": "Solar forecast",
+        "description": "Forecast sensors (Solcast day sensors, Forecast.Solar, Open-Meteo Solar Forecast). Values from all selected sensors are added up.",
+        "data": {
+          "pv_entities": "PV forecast sensors",
+          "pv_estimate": "Solcast estimate",
+          "pv_scale": "Scale factor"
+        }
+      },
+      "battery": {
+        "title": "Battery",
+        "description": "Battery and inverter capabilities.",
+        "data": {
+          "soc_entity": "State of charge sensor (%)",
+          "capacity_kwh": "Usable capacity",
+          "max_charge_w": "Max charge power",
+          "max_discharge_w": "Max discharge power",
+          "charge_efficiency": "Charge efficiency (AC to battery)",
+          "discharge_efficiency": "Discharge efficiency (battery to AC)",
+          "battery_power_entity": "Battery power sensor (+ charge)"
+        }
+      },
+      "load": {
+        "title": "Consumption & grid",
+        "description": "The load forecast uses the recorder history of the consumption sensor (household AC loads, without battery). Grid power sensor: positive = import.",
+        "data": {
+          "load_entity": "Consumption power/energy sensor",
+          "load_days": "History days for load forecast",
+          "load_fallback_w": "Fallback load",
+          "grid_power_entity": "Grid power sensor (+ import)",
+          "max_import_w": "Max grid import",
+          "max_export_w": "Max grid export"
+        }
+      },
+      "control": {
+        "title": "Victron ESS control",
+        "description": "Entities to control (core Victron GX integration suggestions are pre-filled). Leave the grid setpoint empty for advisory-only use. The PV limiter is used to curtail an AC-coupled PV inverter at negative prices.",
+        "data": {
+          "setpoint_entity": "ESS grid setpoint",
+          "charge_limit_entity": "ESS max charge power",
+          "discharge_limit_entity": "ESS max inverter (discharge) power",
+          "feed_in_limit_entity": "ESS max feed-in power",
+          "dess_mode_entity": "Victron Dynamic ESS mode (switched off while in control)",
+          "idle_setpoint_w": "Grid setpoint during self consumption",
+          "pv_limit_entity": "PV inverter power limit",
+          "pv_limit_unit": "PV limit unit",
+          "pv_limit_max_w": "PV inverter max power",
+          "pv_power_entity": "PV inverter power sensor"
+        }
+      }
+    },
+    "error": {
+      "entity_not_found": "Entity not found",
+      "no_price_forecast": "No price forecast found in the attributes of this sensor"
+    },
+    "abort": {}
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Energy Control",
+        "menu_options": {
+          "prices": "Electricity prices",
+          "pv": "Solar forecast",
+          "battery": "Battery",
+          "load": "Consumption & grid",
+          "control": "Victron ESS control",
+          "save": "Save and close"
+        }
+      },
+      "prices": {
+        "title": "Electricity prices",
+        "description": "Sensor with a price forecast in its attributes (Tibber Prices, Nord Pool, ENTSO-e, EnergyZero, ...). Export compensation: 'netting' (export = import, e.g. NL saldering) switches to 'spot' after the netting end date.",
+        "data": {
+          "price_entity": "Price forecast sensor",
+          "price_includes_taxes": "Prices include taxes and fees",
+          "markup": "Supplier markup (spot-only sources)",
+          "energy_tax": "Energy tax (spot-only sources)",
+          "vat": "VAT (spot-only sources)",
+          "export_mode": "Export compensation",
+          "netting_end": "Netting (saldering) ends on",
+          "export_factor": "Export factor on spot price",
+          "export_fee": "Export fee (subtracted)",
+          "export_fixed": "Fixed export price"
+        }
+      },
+      "pv": {
+        "title": "Solar forecast",
+        "description": "Forecast sensors (Solcast day sensors, Forecast.Solar, Open-Meteo Solar Forecast). Values from all selected sensors are added up.",
+        "data": {
+          "pv_entities": "PV forecast sensors",
+          "pv_estimate": "Solcast estimate",
+          "pv_scale": "Scale factor"
+        }
+      },
+      "battery": {
+        "title": "Battery",
+        "description": "Battery and inverter capabilities.",
+        "data": {
+          "soc_entity": "State of charge sensor (%)",
+          "capacity_kwh": "Usable capacity",
+          "max_charge_w": "Max charge power",
+          "max_discharge_w": "Max discharge power",
+          "charge_efficiency": "Charge efficiency (AC to battery)",
+          "discharge_efficiency": "Discharge efficiency (battery to AC)",
+          "battery_power_entity": "Battery power sensor (+ charge)"
+        }
+      },
+      "load": {
+        "title": "Consumption & grid",
+        "description": "The load forecast uses the recorder history of the consumption sensor (household AC loads, without battery). Grid power sensor: positive = import.",
+        "data": {
+          "load_entity": "Consumption power/energy sensor",
+          "load_days": "History days for load forecast",
+          "load_fallback_w": "Fallback load",
+          "grid_power_entity": "Grid power sensor (+ import)",
+          "max_import_w": "Max grid import",
+          "max_export_w": "Max grid export"
+        }
+      },
+      "control": {
+        "title": "Victron ESS control",
+        "description": "Entities to control (core Victron GX integration suggestions are pre-filled). Leave the grid setpoint empty for advisory-only use. The PV limiter is used to curtail an AC-coupled PV inverter at negative prices.",
+        "data": {
+          "setpoint_entity": "ESS grid setpoint",
+          "charge_limit_entity": "ESS max charge power",
+          "discharge_limit_entity": "ESS max inverter (discharge) power",
+          "feed_in_limit_entity": "ESS max feed-in power",
+          "dess_mode_entity": "Victron Dynamic ESS mode (switched off while in control)",
+          "idle_setpoint_w": "Grid setpoint during self consumption",
+          "pv_limit_entity": "PV inverter power limit",
+          "pv_limit_unit": "PV limit unit",
+          "pv_limit_max_w": "PV inverter max power",
+          "pv_power_entity": "PV inverter power sensor"
+        }
+      }
+    },
+    "error": {
+      "entity_not_found": "Entity not found",
+      "no_price_forecast": "No price forecast found in the attributes of this sensor"
+    }
+  },
+  "selector": {
+    "export_mode": {
+      "options": {
+        "netting": "Netting (export = import price)",
+        "spot": "Spot price x factor - fee",
+        "fixed": "Fixed price"
+      }
+    },
+    "pv_estimate": {
+      "options": {
+        "pv_estimate": "Median",
+        "pv_estimate10": "Pessimistic (P10)",
+        "pv_estimate90": "Optimistic (P90)"
+      }
+    },
+    "pv_limit_unit": {
+      "options": {
+        "W": "Watt",
+        "%": "Percent"
+      }
+    },
+    "action": {
+      "options": {
+        "self_consume": "Self consumption",
+        "hold": "Hold",
+        "charge_grid": "Charge from grid",
+        "discharge_grid": "Discharge to grid"
+      }
+    }
+  },
+  "entity": {
+    "select": {
+      "mode": {
+        "name": "Mode",
+        "state": {
+          "off": "Off",
+          "advisory": "Advisory (plan only)",
+          "auto": "Automatic",
+          "self_consumption": "Self consumption",
+          "force_charge": "Force charge",
+          "force_discharge": "Force discharge",
+          "hold": "Hold battery"
+        }
+      }
+    },
+    "switch": {
+      "grid_charge": {
+        "name": "Grid charging"
+      },
+      "battery_to_grid": {
+        "name": "Battery to grid (arbitrage)"
+      },
+      "curtail_negative": {
+        "name": "Curtail PV at negative prices"
+      }
+    },
+    "number": {
+      "min_soc": {
+        "name": "Minimum SoC"
+      },
+      "max_soc": {
+        "name": "Maximum SoC"
+      },
+      "cycle_cost": {
+        "name": "Battery wear cost"
+      },
+      "arbitrage_margin": {
+        "name": "Arbitrage margin"
+      }
+    },
+    "binary_sensor": {
+      "control_active": {
+        "name": "Control active"
+      },
+      "curtailing": {
+        "name": "Curtailing PV"
+      }
+    },
+    "sensor": {
+      "action": {
+        "name": "Action",
+        "state": {
+          "self_consume": "Self consumption",
+          "hold": "Hold",
+          "charge_grid": "Charge from grid",
+          "discharge_grid": "Discharge to grid"
+        }
+      },
+      "planned_grid_power": {
+        "name": "Planned grid power"
+      },
+      "planned_battery_power": {
+        "name": "Planned battery power"
+      },
+      "target_soc": {
+        "name": "Target SoC"
+      },
+      "next_grid_charge": {
+        "name": "Next grid charge"
+      },
+      "next_grid_discharge": {
+        "name": "Next grid discharge"
+      },
+      "plan_cost": {
+        "name": "Planned cost (horizon)"
+      },
+      "plan_savings": {
+        "name": "Planned savings (horizon)"
+      },
+      "cost_today": {
+        "name": "Energy cost today"
+      },
+      "plan": {
+        "name": "Plan"
+      }
+    }
+  },
+  "services": {
+    "replan": {
+      "name": "Replan",
+      "description": "Recompute the schedule now (also refreshes the load profile).",
+      "fields": {
+        "config_entry_id": {
+          "name": "Entry",
+          "description": "Energy Control entry (default: all)."
+        }
+      }
+    },
+    "override": {
+      "name": "Override",
+      "description": "Run a fixed action for a while, ignoring the plan (control modes only).",
+      "fields": {
+        "config_entry_id": {
+          "name": "Entry",
+          "description": "Energy Control entry (default: all)."
+        },
+        "action": {
+          "name": "Action",
+          "description": "Action to run."
+        },
+        "duration": {
+          "name": "Duration",
+          "description": "How long."
+        },
+        "power": {
+          "name": "Power",
+          "description": "Charge/discharge power (default: maximum)."
+        }
+      }
+    },
+    "clear_override": {
+      "name": "Clear override",
+      "description": "Return to the plan.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Entry",
+          "description": "Energy Control entry (default: all)."
+        }
+      }
+    }
+  },
+  "issues": {
+    "control_failed": {
+      "title": "Energy Control cannot control the ESS",
+      "description": "Writing to the Victron entities failed: {error}. The system falls back to its own ESS settings until this is resolved."
+    }
+  },
+  "exceptions": {
+    "no_entry": {
+      "message": "No loaded Energy Control entry found."
+    }
+  }
+}
