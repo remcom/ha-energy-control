@@ -176,8 +176,8 @@
     },
     "pv_limit_unit": {
       "options": {
-        "W": "Watt",
-        "%": "Percent"
+        "watt": "Watt",
+        "percent": "Percent"
       }
     },
     "action": {

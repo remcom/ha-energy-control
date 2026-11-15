@@ -47,6 +47,8 @@ from .const import (
     CONF_PV_LIMIT_ENTITY,
     CONF_PV_LIMIT_MAX_W,
     CONF_PV_LIMIT_UNIT,
+    PV_UNIT_PERCENT,
+    PV_UNIT_WATT,
     CONF_PV_POWER_ENTITY,
     CONF_PV_SCALE,
     CONF_SETPOINT_ENTITY,
@@ -187,7 +189,7 @@ def step_schema(step: str, values: dict[str, Any]) -> vol.Schema:
                 _opt(CONF_DESS_MODE_ENTITY, values): _entity("select"),
                 _req(CONF_IDLE_SETPOINT_W, values): _num(-1000, 1000, 5, "W"),
                 _opt(CONF_PV_LIMIT_ENTITY, values): _entity("number"),
-                _req(CONF_PV_LIMIT_UNIT, values): _select(["W", "%"], "pv_limit_unit"),
+                _req(CONF_PV_LIMIT_UNIT, values): _select([PV_UNIT_WATT, PV_UNIT_PERCENT], "pv_limit_unit"),
                 _req(CONF_PV_LIMIT_MAX_W, values): _num(0, 100000, 10, "W"),
                 _opt(CONF_PV_POWER_ENTITY, values): _entity("sensor"),
             }

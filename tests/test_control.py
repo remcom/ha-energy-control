@@ -64,6 +64,6 @@ def test_pv_limit_feedback():
 
 
 def test_pv_limit_units():
-    assert to_entity_value(1350, "%", 2700) == 50.0
-    assert from_entity_value(50, "%", 2700) == 1350
-    assert to_entity_value(1350.4, "W", 2700) == 1350
+    assert to_entity_value(1350, "percent", 2700) == 50.0
+    assert from_entity_value(50, "percent", 2700) == 1350
+    assert to_entity_value(1350.4, "watt", 2700) == 1350

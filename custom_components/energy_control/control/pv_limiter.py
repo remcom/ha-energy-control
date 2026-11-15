@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from ..const import PV_UNIT_PERCENT
+
 TARGET_IMPORT_W = 50.0  # aim for a small import so we never export at a negative price
 
 
@@ -27,13 +29,13 @@ def curtail_limit_w(
 
 def to_entity_value(limit_w: float, unit: str, max_w: float) -> float:
     """Convert W to the limiter entity's unit."""
-    if unit == "%":
+    if unit == PV_UNIT_PERCENT:
         return round(100.0 * limit_w / max_w, 1) if max_w else 0.0
     return round(limit_w)
 
 
 def from_entity_value(value: float, unit: str, max_w: float) -> float:
     """Convert the limiter entity's value to W."""
-    if unit == "%":
+    if unit == PV_UNIT_PERCENT:
         return value * max_w / 100.0
     return value

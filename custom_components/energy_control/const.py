@@ -49,6 +49,8 @@ CONF_DESS_MODE_ENTITY: Final = "dess_mode_entity"
 CONF_IDLE_SETPOINT_W: Final = "idle_setpoint_w"
 CONF_PV_LIMIT_ENTITY: Final = "pv_limit_entity"
 CONF_PV_LIMIT_UNIT: Final = "pv_limit_unit"
+PV_UNIT_WATT: Final = "watt"
+PV_UNIT_PERCENT: Final = "percent"
 CONF_PV_LIMIT_MAX_W: Final = "pv_limit_max_w"
 CONF_PV_POWER_ENTITY: Final = "pv_power_entity"
 
@@ -74,7 +76,7 @@ DEFAULTS: Final[dict[str, object]] = {
     CONF_MAX_IMPORT_W: 8000,
     CONF_MAX_EXPORT_W: 4600,
     CONF_IDLE_SETPOINT_W: 30,
-    CONF_PV_LIMIT_UNIT: "W",
+    CONF_PV_LIMIT_UNIT: PV_UNIT_WATT,
     CONF_PV_LIMIT_MAX_W: 2700,
 }
 
