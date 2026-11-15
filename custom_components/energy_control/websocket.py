@@ -9,9 +9,10 @@ import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.util import dt as dt_util
 
-from .const import CONF_CAPACITY_KWH, DOMAIN, SET_MAX_SOC, SET_MIN_SOC
+from .const import CONF_CAPACITY_KWH, DOMAIN, SET_MAX_SOC, SET_MIN_SOC, SIGNAL_ENTRY_LOADED
 from .data import EnergyControlData
 
 
@@ -44,7 +45,7 @@ def build_payload(data: EnergyControlData, history_hours: float) -> dict[str, An
         "control_active": controller.active,
         "curtailing": controller.curtailing,
         "last_error": controller.last_error or coordinator.last_plan_error,
-        "soc": coordinator.soc_pct,
+        "soc": coordinator.current_soc,
         "settings": dict(coordinator.settings),
         "capacity_kwh": float(coordinator.config[CONF_CAPACITY_KWH]),
         "min_soc": coordinator.settings[SET_MIN_SOC],
@@ -104,22 +105,43 @@ def ws_subscribe(hass: HomeAssistant, connection: websocket_api.ActiveConnection
         connection.send_error(msg["id"], "not_found", "No loaded Energy Control entry")
         return
     hours = msg["history_hours"]
-    last: dict[str, Any] = {}
+    entry_id = data.coordinator.config_entry.entry_id
+    state: dict[str, Any] = {"data": data, "payload": None, "unsubs": []}
 
     @callback
     def push() -> None:
-        payload = build_payload(data, hours)
-        if payload != last.get("payload"):
-            last["payload"] = payload
+        payload = build_payload(state["data"], hours)
+        if payload != state["payload"]:
+            state["payload"] = payload
             connection.send_message(websocket_api.event_message(msg["id"], payload))
 
-    unsub_plan = data.coordinator.async_add_listener(push)
-    unsub_ctrl = data.controller.async_add_listener(push)
+    @callback
+    def detach() -> None:
+        for unsub in state["unsubs"]:
+            unsub()
+        state["unsubs"] = []
+
+    @callback
+    def attach(new: EnergyControlData) -> None:
+        detach()
+        state["data"] = new
+        state["unsubs"] = [new.coordinator.async_add_listener(push), new.controller.async_add_listener(push)]
+
+    @callback
+    def on_entry_loaded(loaded_id: str, new: EnergyControlData) -> None:
+        # A reload creates new coordinator/controller objects: follow them.
+        # (Sent from async_setup_entry, before the entry state is LOADED.)
+        if loaded_id == entry_id:
+            attach(new)
+            push()
+
+    attach(data)
+    unsub_loaded = async_dispatcher_connect(hass, SIGNAL_ENTRY_LOADED, on_entry_loaded)
 
     @callback
     def unsubscribe() -> None:
-        unsub_plan()
-        unsub_ctrl()
+        detach()
+        unsub_loaded()
 
     connection.subscriptions[msg["id"]] = unsubscribe
     connection.send_result(msg["id"])

@@ -32,11 +32,13 @@ def _next_start(plan: Plan | None, action: Action) -> datetime | None:
     if plan is None:
         return None
     now = dt_util.utcnow()
+    current = plan.slot_at(now)
+    if current is not None and current.action == action:
+        return current.start
     for slot in plan.slots:
         if slot.action == action and slot.start >= now:
             return slot.start
-    current = plan.slot_at(now)
-    return current.start if current and current.action == action else None
+    return None
 
 
 def _today_start() -> datetime:

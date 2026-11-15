@@ -329,6 +329,12 @@
   "exceptions": {
     "no_entry": {
       "message": "No loaded Energy Control entry found."
+    },
+    "override_needs_control": {
+      "message": "An override only works in a control mode (auto, self consumption, force charge/discharge, hold) with a grid setpoint configured; current mode: {mode}."
+    },
+    "min_soc_above_max": {
+      "message": "Minimum SoC ({min_soc}%) cannot be above maximum SoC ({max_soc}%)."
     }
   }
 }

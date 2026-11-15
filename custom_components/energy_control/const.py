@@ -129,7 +129,7 @@ STALE_PLAN_MINUTES: Final = 45
 LOAD_PROFILE_REFRESH_H: Final = 6
 HISTORY_DAYS: Final = 7
 
-SIGNAL_PLAN_UPDATED: Final = f"{DOMAIN}_plan_updated_{{}}"
+SIGNAL_ENTRY_LOADED: Final = f"{DOMAIN}_entry_loaded"  # args: entry_id, EnergyControlData
 
 # --- Frontend ----------------------------------------------------------------
 FRONTEND_URL: Final = f"/{DOMAIN}/energy-control-card.js"

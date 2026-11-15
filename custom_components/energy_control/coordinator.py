@@ -109,7 +109,9 @@ class EnergyControlCoordinator(DataUpdateCoordinator[Plan]):
             update_interval=None,
             request_refresh_debouncer=Debouncer(hass, _LOGGER, cooldown=10, immediate=True),
         )
-        self.config: dict[str, Any] = {**DEFAULTS, **entry.data, **entry.options}
+        # The options flow stores the complete configuration, so options replace
+        # data (merging would resurrect fields cleared in the options flow).
+        self.config: dict[str, Any] = {**DEFAULTS, **(entry.options or entry.data)}
         self.settings: dict[str, Any] = dict(DEFAULT_SETTINGS)
         self._settings_store: Store[dict[str, Any]] = Store(hass, 1, f"{DOMAIN}.{entry.entry_id}.settings")
         self.load_profile: LoadProfile | None = None
@@ -147,6 +149,12 @@ class EnergyControlCoordinator(DataUpdateCoordinator[Plan]):
         self.hass.async_create_task(self.async_request_refresh())
 
     # --- settings ----------------------------------------------------------
+    @property
+    def current_soc(self) -> float | None:
+        """Live SoC (%), falling back to the value used for the last plan."""
+        live = state_float(self.hass, self.config.get(CONF_SOC_ENTITY))
+        return live if live is not None else self.soc_pct
+
     @property
     def mode(self) -> Mode:
         """Current mode."""

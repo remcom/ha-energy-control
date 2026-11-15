@@ -12,7 +12,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
-from homeassistant.const import EVENT_HOMEASSISTANT_STOP
+from homeassistant.const import EVENT_HOMEASSISTANT_STOP, STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import issue_registry as ir
@@ -24,6 +24,7 @@ from ..const import (
     CONF_BATTERY_POWER_ENTITY,
     CONF_CHARGE_LIMIT_ENTITY,
     CONF_DESS_MODE_ENTITY,
+    CONF_DISCHARGE_EFF,
     CONF_DISCHARGE_LIMIT_ENTITY,
     CONF_FEED_IN_LIMIT_ENTITY,
     CONF_GRID_POWER_ENTITY,
@@ -62,6 +63,17 @@ DESS_OFF_OPTIONS = ("off", "disabled", "0")
 WRITE_TOLERANCE_W = 5.0
 PV_LIMIT_HYSTERESIS_W = 40.0
 REPLAN_SOC_DEVIATION = 5.0  # % points
+STORE_CURTAILING = "_curtailing"  # extra key in the originals store
+
+# Actuators that must report a value before we take over, so their original
+# setting can be saved and restored. The PV limiter is excluded: many PV
+# inverters go offline at night; its original is captured once it reports.
+TAKEOVER_KEYS = (
+    CONF_SETPOINT_ENTITY,
+    CONF_CHARGE_LIMIT_ENTITY,
+    CONF_DISCHARGE_LIMIT_ENTITY,
+    CONF_FEED_IN_LIMIT_ENTITY,
+)
 
 
 class VictronController:
@@ -77,6 +89,9 @@ class VictronController:
         self._store: Store[dict[str, Any]] = Store(hass, 1, f"{DOMAIN}.{entry_id}.originals")
         self._originals: dict[str, Any] | None = None
         self._unsubs: list[Callable[[], None]] = []
+        self._unsub_stop: Callable[[], None] | None = None
+        self._stopping = False
+        self._waiting_logged = False
         self.active = False  # we currently own the hardware
         self.desired: Desired | None = None
         self.curtailing = False
@@ -93,22 +108,38 @@ class VictronController:
 
     async def async_start(self) -> None:
         """Start the control loop."""
-        self._originals = await self._store.async_load()
-        self.active = self._originals is not None  # crashed while in control
+        stored = await self._store.async_load()
+        if stored is not None:
+            # Crashed while in control: we still own the hardware.
+            stored = dict(stored)
+            self.curtailing = bool(stored.pop(STORE_CURTAILING, False))
+            self._originals = stored
+            self.active = True
         self._unsubs.append(async_track_time_interval(self.hass, self._tick, timedelta(seconds=CONTROL_INTERVAL_S)))
         self._unsubs.append(self.coordinator.async_add_listener(self._on_update))
-        self._unsubs.append(self.hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, self._on_stop))
+        self._unsub_stop = self.hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, self._on_stop)
         await self.async_apply()
 
-    async def async_stop(self) -> None:
-        """Stop and hand control back."""
+    def _cancel_listeners(self) -> None:
         for unsub in self._unsubs:
             unsub()
         self._unsubs.clear()
+        if self._unsub_stop is not None:
+            self._unsub_stop()
+            self._unsub_stop = None
+
+    async def async_stop(self) -> None:
+        """Stop and hand control back."""
+        self._stopping = True
+        self._cancel_listeners()
         await self.async_release()
 
     async def _on_stop(self, _event: Event) -> None:
         # Best effort: never leave the ESS in a forced charge/discharge state.
+        # The once-listener is gone after firing: do not remove it again.
+        self._unsub_stop = None
+        self._stopping = True
+        self._cancel_listeners()
         await self.async_release()
 
     @callback
@@ -123,7 +154,8 @@ class VictronController:
 
     @callback
     def _on_update(self) -> None:
-        self.hass.async_create_task(self.async_apply())
+        if not self._stopping:
+            self.hass.async_create_task(self.async_apply())
 
     async def _tick(self, now: datetime) -> None:
         self._record(now)
@@ -159,6 +191,7 @@ class VictronController:
             max_export=float(c[CONF_MAX_EXPORT_W]),
             max_charge=float(c[CONF_MAX_CHARGE_W]),
             max_discharge=float(c[CONF_MAX_DISCHARGE_W]),
+            discharge_efficiency=float(c[CONF_DISCHARGE_EFF]) / 100,
         )
 
     def _originals_obj(self) -> Originals:
@@ -174,27 +207,32 @@ class VictronController:
         """Action for `now`, the plan slot used (if any) and a status string."""
         coordinator = self.coordinator
         mode = coordinator.mode
+        soc = state_float(self.hass, self.config.get(CONF_SOC_ENTITY))
+        min_soc = float(coordinator.settings[SET_MIN_SOC])
+        max_soc = max(float(coordinator.settings[SET_MAX_SOC]), min_soc)
+
+        def forced(action: Action, status: str) -> tuple[Action, SlotPlan | None, str]:
+            # Manual forcing (mode or override) still respects the SoC window.
+            if action == Action.CHARGE_GRID and soc is not None and soc >= max_soc:
+                return Action.SELF_CONSUME, None, "max_soc_reached"
+            if action == Action.DISCHARGE_GRID and soc is not None and soc <= min_soc:
+                return Action.SELF_CONSUME, None, "min_soc_reached"
+            return action, None, status
+
         override = coordinator.override
         if override is not None:
             if now < override.until:
-                return override.action, None, "override"
+                return forced(override.action, "override")
             coordinator.override = None
 
-        soc = state_float(self.hass, self.config.get(CONF_SOC_ENTITY))
-        min_soc = float(coordinator.settings[SET_MIN_SOC])
-        max_soc = float(coordinator.settings[SET_MAX_SOC])
         if mode == Mode.SELF_CONSUMPTION:
             return Action.SELF_CONSUME, None, "manual"
         if mode == Mode.HOLD:
             return Action.HOLD, None, "manual"
         if mode == Mode.FORCE_CHARGE:
-            if soc is not None and soc >= max_soc:
-                return Action.SELF_CONSUME, None, "max_soc_reached"
-            return Action.CHARGE_GRID, None, "manual"
+            return forced(Action.CHARGE_GRID, "manual")
         if mode == Mode.FORCE_DISCHARGE:
-            if soc is not None and soc <= min_soc:
-                return Action.SELF_CONSUME, None, "min_soc_reached"
-            return Action.DISCHARGE_GRID, None, "manual"
+            return forced(Action.DISCHARGE_GRID, "manual")
 
         plan = coordinator.data
         if plan is None or now - plan.created > timedelta(minutes=STALE_PLAN_MINUTES):
@@ -213,6 +251,8 @@ class VictronController:
             await self._async_apply()
 
     async def _async_apply(self) -> None:
+        if self._stopping:
+            return
         mode = self.coordinator.mode
         if mode not in CONTROL_MODES or not self.can_control:
             if self.active:
@@ -232,14 +272,19 @@ class VictronController:
             power = override.power_w if override and override.power_w else None
             battery_kw = (power or limits.max_charge) / 1000 if action == Action.CHARGE_GRID else 0.0
             if action == Action.DISCHARGE_GRID:
-                battery_kw = -(power or limits.max_discharge) / 1000
+                # A requested override power is the AC inverter limit; desired_for
+                # expects battery-side (DC) power.
+                battery_kw = -(power / limits.discharge_efficiency if power else limits.max_discharge) / 1000
             grid_kw = 0.0
             curtail = False
         if not self.coordinator.settings.get(SET_CURTAIL_NEGATIVE, True):
             curtail = False
 
+        if not await self._async_take_over():
+            self.status = "waiting_for_entities"
+            self._notify()
+            return
         try:
-            await self._async_take_over()
             desired = desired_for(
                 action,
                 battery_kw=battery_kw,
@@ -272,32 +317,69 @@ class VictronController:
             )
         self._notify()
 
-    async def _async_take_over(self) -> None:
+    def _missing_entities(self) -> list[str]:
+        """Configured actuators that do not report a usable value yet."""
+        missing = []
+        for key in TAKEOVER_KEYS:
+            entity_id = self.config.get(key)
+            if entity_id and state_float(self.hass, entity_id) is None:
+                missing.append(entity_id)
+        dess = self.config.get(CONF_DESS_MODE_ENTITY)
+        if dess:
+            state = self.hass.states.get(dess)
+            if state is None or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+                missing.append(dess)
+        return missing
+
+    def _pv_limit_original(self) -> float | None:
+        pv_value = state_float(self.hass, self.config.get(CONF_PV_LIMIT_ENTITY))
+        if pv_value is None:
+            return None
+        return from_entity_value(pv_value, self.config[CONF_PV_LIMIT_UNIT], float(self.config[CONF_PV_LIMIT_MAX_W]))
+
+    async def _async_save_store(self) -> None:
+        if self._originals is not None:
+            await self._store.async_save({**self._originals, STORE_CURTAILING: self.curtailing})
+
+    async def _async_take_over(self) -> bool:
+        """Save the original settings and take control. False while not possible yet."""
         if self.active and self._originals is not None:
-            return
+            # Late capture of the PV limiter original (inverter was offline).
+            if (
+                self.config.get(CONF_PV_LIMIT_ENTITY)
+                and CONF_PV_LIMIT_ENTITY not in self._originals
+                and not self.curtailing
+                and (pv_original := self._pv_limit_original()) is not None
+            ):
+                self._originals[CONF_PV_LIMIT_ENTITY] = pv_original
+                await self._async_save_store()
+            return True
+        if missing := self._missing_entities():
+            if not self._waiting_logged:
+                _LOGGER.warning("Energy Control waits for %s before taking over", ", ".join(missing))
+                self._waiting_logged = True
+            return False
+        self._waiting_logged = False
         originals: dict[str, Any] = {}
-        for key in (
-            CONF_SETPOINT_ENTITY,
-            CONF_CHARGE_LIMIT_ENTITY,
-            CONF_DISCHARGE_LIMIT_ENTITY,
-            CONF_FEED_IN_LIMIT_ENTITY,
-        ):
+        for key in TAKEOVER_KEYS:
             value = state_float(self.hass, self.config.get(key))
             if value is not None:
                 originals[key] = value
-        pv_value = state_float(self.hass, self.config.get(CONF_PV_LIMIT_ENTITY))
-        if pv_value is not None:
-            originals[CONF_PV_LIMIT_ENTITY] = from_entity_value(
-                pv_value, self.config[CONF_PV_LIMIT_UNIT], float(self.config[CONF_PV_LIMIT_MAX_W])
-            )
+        if (pv_original := self._pv_limit_original()) is not None:
+            originals[CONF_PV_LIMIT_ENTITY] = pv_original
         dess = self.config.get(CONF_DESS_MODE_ENTITY)
         if dess and (state := self.hass.states.get(dess)) is not None:
             originals[CONF_DESS_MODE_ENTITY] = state.state
         self._originals = originals
-        await self._store.async_save(originals)
+        self.curtailing = False
+        await self._async_save_store()
         self.active = True
         _LOGGER.info("Energy Control took over ESS control (saved %s)", originals)
-        await self._set_dess_off()
+        try:
+            await self._set_dess_off()
+        except HomeAssistantError as err:
+            _LOGGER.warning("Energy Control could not switch DESS off: %s", err)
+        return True
 
     async def async_release(self) -> None:
         """Restore the original actuator values."""
@@ -308,22 +390,29 @@ class VictronController:
         if not self.active:
             return
         originals = self._originals or {}
-        try:
-            for key in (
-                CONF_SETPOINT_ENTITY,
-                CONF_CHARGE_LIMIT_ENTITY,
-                CONF_DISCHARGE_LIMIT_ENTITY,
-                CONF_FEED_IN_LIMIT_ENTITY,
-            ):
-                if key in originals:
+        errors: list[str] = []
+        # Best effort per entity: one failure must not block the other restores.
+        for key in TAKEOVER_KEYS:
+            if key in originals:
+                try:
                     await self._write_number(key, float(originals[key]))
-            if CONF_PV_LIMIT_ENTITY in originals:
-                await self._write_pv_limit(float(originals[CONF_PV_LIMIT_ENTITY]), force=True)
-            dess = self.config.get(CONF_DESS_MODE_ENTITY)
-            if dess and originals.get(CONF_DESS_MODE_ENTITY):
+                except HomeAssistantError as err:
+                    errors.append(str(err))
+        if self.config.get(CONF_PV_LIMIT_ENTITY) and (CONF_PV_LIMIT_ENTITY in originals or self.curtailing):
+            pv_original = originals.get(CONF_PV_LIMIT_ENTITY, self.config[CONF_PV_LIMIT_MAX_W])
+            try:
+                await self._write_pv_limit(float(pv_original), force=True)
+            except HomeAssistantError as err:
+                errors.append(str(err))
+        dess = self.config.get(CONF_DESS_MODE_ENTITY)
+        if dess and originals.get(CONF_DESS_MODE_ENTITY):
+            try:
                 await self._select(dess, originals[CONF_DESS_MODE_ENTITY])
-        except HomeAssistantError as err:
-            _LOGGER.error("Energy Control could not restore original ESS settings: %s", err)
+            except HomeAssistantError as err:
+                errors.append(str(err))
+        if errors:
+            # Keep the saved originals: the next apply (or restart) retries.
+            _LOGGER.error("Energy Control could not restore all original ESS settings: %s", "; ".join(errors))
             return
         self.active = False
         self.curtailing = False
@@ -360,15 +449,18 @@ class VictronController:
         state = self.hass.states.get(entity_id)
         if state is None:
             raise HomeAssistantError(f"{entity_id} not found")
-        current = state_float(self.hass, entity_id)
-        if current is not None and abs(current - value) <= WRITE_TOLERANCE_W:
-            return
+        # `value` is in W; min/max and the written value are in the entity's unit.
+        factor = 1000.0 if state.attributes.get("unit_of_measurement") == "kW" else 1.0
+        value /= factor
         lo = state.attributes.get("min")
         hi = state.attributes.get("max")
         if lo is not None:
             value = max(float(lo), value)
         if hi is not None:
             value = min(float(hi), value)
+        current = state_float(self.hass, entity_id)
+        if current is not None and abs(current - value * factor) <= WRITE_TOLERANCE_W:
+            return
         _LOGGER.debug("Set %s: %s -> %s", entity_id, current, value)
         await self.hass.services.async_call(
             "number", "set_value", {"entity_id": entity_id, "value": value}, blocking=True
@@ -393,11 +485,14 @@ class VictronController:
                     fallback_w=fallback,
                 )
             await self._write_pv_limit(limit)
-            self.curtailing = True
+            if not self.curtailing:
+                self.curtailing = True
+                await self._async_save_store()
         elif self.curtailing:
             original = self._originals_obj().pv_limit_w
             await self._write_pv_limit(original if original is not None else max_w, force=True)
             self.curtailing = False
+            await self._async_save_store()
 
     async def _write_pv_limit(self, limit_w: float, force: bool = False) -> None:
         entity_id = self.config[CONF_PV_LIMIT_ENTITY]

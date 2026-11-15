@@ -22,6 +22,8 @@ class _Accumulator:
     mode: str
     seconds: float = 0.0
     grid_ws: float = 0.0
+    import_ws: float = 0.0
+    export_ws: float = 0.0
     battery_ws: float = 0.0
     grid_samples: float = 0.0
     battery_samples: float = 0.0
@@ -73,6 +75,8 @@ class History:
             acc.seconds += dt_s
             if grid_w is not None:
                 acc.grid_ws += grid_w * dt_s
+                acc.import_ws += max(grid_w, 0.0) * dt_s
+                acc.export_ws += max(-grid_w, 0.0) * dt_s
                 acc.grid_samples += dt_s
             if battery_w is not None:
                 acc.battery_ws += battery_w * dt_s
@@ -88,9 +92,12 @@ class History:
         battery_kw = acc.battery_ws / acc.battery_samples / 1000 if acc.battery_samples else None
         hours = SLOT_MINUTES / 60
         actual_cost = None
-        if grid_kw is not None and planned:
-            price = planned["import_price"] if grid_kw >= 0 else planned["export_price"]
-            actual_cost = grid_kw * hours * price
+        if acc.grid_samples and planned:
+            # Import and export are priced separately: a slot can contain both.
+            # Average power over the sampled time, extrapolated to the full slot.
+            import_kwh = acc.import_ws / acc.grid_samples / 1000 * hours
+            export_kwh = acc.export_ws / acc.grid_samples / 1000 * hours
+            actual_cost = import_kwh * planned["import_price"] - export_kwh * planned["export_price"]
         record = {
             "start": acc.start.isoformat(),
             "mode": acc.mode,

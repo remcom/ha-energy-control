@@ -11,7 +11,7 @@ from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN
+from .const import CONTROL_MODES, DOMAIN
 from .coordinator import Override
 from .data import EnergyControlData
 from .optimizer import Action
@@ -52,7 +52,16 @@ def async_setup_services(hass: HomeAssistant) -> None:
 
     async def override(call: ServiceCall) -> None:
         duration: timedelta = call.data["duration"]
-        for data in _entries(hass, call):
+        entries = _entries(hass, call)
+        for data in entries:
+            if data.coordinator.mode not in CONTROL_MODES or not data.controller.can_control:
+                # The controller ignores overrides outside control modes: say so.
+                raise ServiceValidationError(
+                    translation_domain=DOMAIN,
+                    translation_key="override_needs_control",
+                    translation_placeholders={"mode": data.coordinator.mode.value},
+                )
+        for data in entries:
             data.coordinator.override = Override(
                 action=Action(call.data["action"]),
                 until=dt_util.utcnow() + duration,

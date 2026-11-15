@@ -67,3 +67,17 @@ def test_pv_limit_units():
     assert to_entity_value(1350, "percent", 2700) == 50.0
     assert from_entity_value(50, "percent", 2700) == 1350
     assert to_entity_value(1350.4, "watt", 2700) == 1350
+
+
+def test_discharge_limit_is_ac_side():
+    """Planned battery (DC) power is scaled by the discharge efficiency for the inverter (AC) limit."""
+    limits = Limits(
+        idle_setpoint=30,
+        max_import=8000,
+        max_export=4600,
+        max_charge=3000,
+        max_discharge=2750,
+        discharge_efficiency=0.9,
+    )
+    d = desired_for(Action.DISCHARGE_GRID, battery_kw=-2.0, grid_kw=-1.5, curtail=False, originals=ORIG, limits=limits)
+    assert d.discharge_limit == 1800

@@ -81,9 +81,14 @@ def victron_suggestions(hass: HomeAssistant) -> dict[str, str]:
     registry = er.async_get(hass)
     found: dict[str, str] = {}
     entries = [e for e in registry.entities.values() if e.platform == "victron_gx" and not e.disabled]
+    ids = {e.entity_id for e in entries}
     for key, (prefix, suffix) in VICTRON_SUGGESTIONS.items():
         for entry in entries:
             if entry.entity_id.startswith(prefix) and entry.entity_id.endswith(suffix):
+                # Per-phase sensors only describe the whole system on a single-phase
+                # installation: on 3-phase systems leave them for the user to pick.
+                if suffix.endswith("_l1") and entry.entity_id.removesuffix("_l1") + "_l2" in ids:
+                    break
                 found[key] = entry.entity_id
                 break
     for entry in entries:

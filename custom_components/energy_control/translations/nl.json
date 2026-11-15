@@ -329,6 +329,12 @@
   "exceptions": {
     "no_entry": {
       "message": "Geen geladen Energy Control-configuratie gevonden."
+    },
+    "override_needs_control": {
+      "message": "Een override werkt alleen in een regelmodus (auto, zelfconsumptie, laden, ontladen, vasthouden) met een geconfigureerd grid-setpoint; huidige modus: {mode}."
+    },
+    "min_soc_above_max": {
+      "message": "Minimale SoC ({min_soc}%) mag niet hoger zijn dan maximale SoC ({max_soc}%)."
     }
   }
 }

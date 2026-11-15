@@ -7,9 +7,10 @@ from dataclasses import dataclass
 from homeassistant.components.number import NumberEntity, NumberEntityDescription, NumberMode
 from homeassistant.const import PERCENTAGE, EntityCategory
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .const import SET_ARBITRAGE_MARGIN, SET_CYCLE_COST, SET_MAX_SOC, SET_MIN_SOC
+from .const import DOMAIN, SET_ARBITRAGE_MARGIN, SET_CYCLE_COST, SET_MAX_SOC, SET_MIN_SOC
 from .data import EnergyControlConfigEntry, EnergyControlData
 from .entity import EnergyControlEntity
 
@@ -77,4 +78,17 @@ class SettingNumber(EnergyControlEntity, NumberEntity):
 
     async def async_set_native_value(self, value: float) -> None:
         """Set."""
+        key = self.entity_description.key
+        settings = self.coordinator.settings
+        if (key == SET_MIN_SOC and value > float(settings[SET_MAX_SOC])) or (
+            key == SET_MAX_SOC and value < float(settings[SET_MIN_SOC])
+        ):
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="min_soc_above_max",
+                translation_placeholders={
+                    "min_soc": str(value if key == SET_MIN_SOC else settings[SET_MIN_SOC]),
+                    "max_soc": str(value if key == SET_MAX_SOC else settings[SET_MAX_SOC]),
+                },
+            )
         await self.coordinator.async_set_setting(self.entity_description.key, value)

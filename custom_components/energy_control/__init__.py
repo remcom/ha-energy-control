@@ -10,9 +10,10 @@ from homeassistant.components.http import StaticPathConfig
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.typing import ConfigType
 
-from .const import DOMAIN, FRONTEND_URL, VERSION
+from .const import DOMAIN, FRONTEND_URL, SIGNAL_ENTRY_LOADED, VERSION
 from .control.victron import VictronController
 from .coordinator import EnergyControlCoordinator
 from .data import EnergyControlConfigEntry, EnergyControlData
@@ -52,6 +53,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: EnergyControlConfigEntry
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     await controller.async_start()
     entry.async_on_unload(entry.add_update_listener(_async_reload))
+    # Let open dashboard subscriptions re-attach after a reload.
+    async_dispatcher_send(hass, SIGNAL_ENTRY_LOADED, entry.entry_id, entry.runtime_data)
     return True
 
 

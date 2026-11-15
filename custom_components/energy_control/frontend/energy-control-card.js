@@ -90,6 +90,7 @@ class EnergyControlCard extends HTMLElement {
 
   disconnectedCallback() {
     this._ro?.disconnect();
+    clearTimeout(this._retry);
     this._unsubscribe();
   }
 
@@ -107,6 +108,11 @@ class EnergyControlCard extends HTMLElement {
     } catch (err) {
       this._error = err?.message || String(err);
       this._render();
+      // The entry may still be loading (e.g. right after a restart): retry.
+      clearTimeout(this._retry);
+      this._retry = setTimeout(() => {
+        if (this.isConnected && !this._unsub) this._subscribe();
+      }, 30000);
     } finally {
       this._subscribing = false;
     }

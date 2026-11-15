@@ -8,7 +8,7 @@ from homeassistant.data_entry_flow import FlowResultType
 
 from custom_components.energy_control.const import DOMAIN
 
-from .test_init import PRICE, SOC, set_hardware, set_prices
+from .common import PRICE, SOC, set_hardware, set_prices
 
 
 async def test_full_flow(hass: HomeAssistant) -> None:

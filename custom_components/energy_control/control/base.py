@@ -28,6 +28,7 @@ class Limits:
     max_export: float
     max_charge: float
     max_discharge: float
+    discharge_efficiency: float = 1.0  # battery (DC) -> AC
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +57,8 @@ def desired_for(
     - CHARGE_GRID: high grid setpoint, charging capped by the charge limit, so the
       ESS charges at the planned rate whatever the load does.
     - DISCHARGE_GRID: negative setpoint, discharge capped by the inverter limit.
+      The plan's battery power is DC; the inverter limit is AC, so it is scaled
+      by the discharge efficiency.
     - HOLD: inverter limit 0 so the grid covers the load; charging is blocked only
       when the plan deliberately exports PV instead of storing it.
     - SELF_CONSUME: original ESS behaviour around the idle setpoint.
@@ -70,7 +73,8 @@ def desired_for(
         charge = min(limits.max_charge, max(100.0, round(battery_kw * 1000, -1)))
     elif action == Action.DISCHARGE_GRID:
         setpoint = -limits.max_export
-        discharge = min(limits.max_discharge, max(100.0, round(-battery_kw * 1000, -1)))
+        ac_w = -battery_kw * 1000 * limits.discharge_efficiency
+        discharge = min(limits.max_discharge, max(100.0, round(ac_w, -1)))
     elif action == Action.HOLD:
         discharge = 0.0
         if grid_kw < 0 and abs(battery_kw) < 1e-3:
