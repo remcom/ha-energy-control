@@ -47,8 +47,6 @@ from .const import (
     CONF_PV_LIMIT_ENTITY,
     CONF_PV_LIMIT_MAX_W,
     CONF_PV_LIMIT_UNIT,
-    PV_UNIT_PERCENT,
-    PV_UNIT_WATT,
     CONF_PV_POWER_ENTITY,
     CONF_PV_SCALE,
     CONF_SETPOINT_ENTITY,
@@ -57,6 +55,8 @@ from .const import (
     DEFAULTS,
     DOMAIN,
     NAME,
+    PV_UNIT_PERCENT,
+    PV_UNIT_WATT,
 )
 
 STEPS = ("prices", "pv", "battery", "load", "control")
