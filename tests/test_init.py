@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 from homeassistant.core import HomeAssistant
+from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
 
 from custom_components.energy_control.const import DOMAIN
@@ -114,3 +115,13 @@ async def test_websocket(hass: HomeAssistant, entry, setup, hass_ws_client) -> N
     event = await client.receive_json()
     assert event["type"] == "event"
     assert event["event"]["plan"]["slots"]
+
+
+async def test_brand_icon_served(hass: HomeAssistant, hass_client) -> None:
+    """The integration ships its own brand icons (HA serves them before the CDN)."""
+    assert await async_setup_component(hass, "brands", {})
+    client = await hass_client()
+    for image in ("icon.png", "icon@2x.png", "dark_icon.png", "logo.png"):
+        response = await client.get(f"/api/brands/integration/{DOMAIN}/{image}")
+        assert response.status == 200, image
+        assert (await response.read()).startswith(b"\x89PNG")
