@@ -62,6 +62,8 @@ from .providers.load import LoadProfile, build_load_profile
 from .providers.prices import ExportMode, PriceModel, PricePoint, parse_price_attributes
 from .providers.slots import build_slots
 from .providers.solar import EnergyInterval, parse_pv_attributes
+from .providers.telemetry import soc_reading
+from .providers.util import to_float
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
@@ -85,9 +87,8 @@ def state_float(hass: HomeAssistant, entity_id: str | None) -> float | None:
     state = hass.states.get(entity_id)
     if state is None or state.state in (STATE_UNKNOWN, STATE_UNAVAILABLE, ""):
         return None
-    try:
-        value = float(state.state)
-    except ValueError:
+    value = to_float(state.state)
+    if value is None:
         return None
     unit = str(state.attributes.get("unit_of_measurement") or "")
     if unit == "kW":
@@ -153,8 +154,7 @@ class EnergyControlCoordinator(DataUpdateCoordinator[Plan]):
     @property
     def current_soc(self) -> float | None:
         """Live SoC (%), falling back to the value used for the last plan."""
-        live = state_float(self.hass, self.config.get(CONF_SOC_ENTITY))
-        return live if live is not None else self.soc_pct
+        return soc_reading(self.hass, self.config.get(CONF_SOC_ENTITY))[0]
 
     @property
     def mode(self) -> Mode:
@@ -314,9 +314,9 @@ class EnergyControlCoordinator(DataUpdateCoordinator[Plan]):
             self.last_plan_error = "no_prices"
             raise UpdateFailed(f"No price forecast in {self.config[CONF_PRICE_ENTITY]}")
 
-        soc = state_float(self.hass, self.config[CONF_SOC_ENTITY])
+        soc, reason = soc_reading(self.hass, self.config[CONF_SOC_ENTITY], now)
         if soc is None:
-            self.last_plan_error = "no_soc"
+            self.last_plan_error = reason
             raise UpdateFailed(f"SoC unavailable: {self.config[CONF_SOC_ENTITY]}")
         self.soc_pct = soc
 

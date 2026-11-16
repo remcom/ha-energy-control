@@ -52,7 +52,7 @@ def parse_solcast(attributes: Mapping[str, Any], estimate: str = "pv_estimate") 
             continue
         start = parse_dt(row.get("period_start"))
         kw = to_float(row.get(estimate, row.get("pv_estimate")))
-        if start is None or kw is None:
+        if start is None or kw is None or kw < 0:
             continue
         parsed.append((start, kw))
     parsed.sort(key=lambda r: r[0])
@@ -68,7 +68,7 @@ def parse_wh_period(attributes: Mapping[str, Any]) -> list[EnergyInterval]:
     parsed = sorted(
         (dt, wh)
         for key, raw in periods.items()
-        if (dt := parse_dt(key)) is not None and (wh := to_float(raw)) is not None
+        if (dt := parse_dt(key)) is not None and (wh := to_float(raw)) is not None and wh >= 0
     )
     minutes = _infer_minutes([p[0] for p in parsed], 60)
     return [EnergyInterval(s, m, wh / 1000) for (s, wh), m in zip(parsed, minutes, strict=True)]
@@ -85,7 +85,7 @@ def parse_generic(attributes: Mapping[str, Any]) -> list[EnergyInterval]:
             continue
         start = next((parse_dt(row[k]) for k in ("period_start", "datetime", "start") if k in row), None)
         value = next((to_float(row[k]) for k in ("energy", "value", "kwh") if k in row), None)
-        if start is None or value is None:
+        if start is None or value is None or value < 0:
             continue
         parsed.append((start, value))
     parsed.sort(key=lambda r: r[0])

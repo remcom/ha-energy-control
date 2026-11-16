@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from math import isfinite
 from typing import Any
 
 
 def to_float(value: Any) -> float | None:
     """Float or None for missing / non-numeric values."""
     try:
-        return float(value)
-    except (TypeError, ValueError):
+        result = float(value)
+        return result if isfinite(result) else None
+    except TypeError, ValueError, OverflowError:
         return None
 
 

@@ -96,14 +96,14 @@ SENSORS: tuple[PlanSensorDescription, ...] = (
         device_class=SensorDeviceClass.MONETARY,
         native_unit_of_measurement="EUR",
         suggested_display_precision=2,
-        value_fn=lambda d: round(p.total_cost, 3) if (p := d.coordinator.data) else None,
+        value_fn=lambda d: round(p.total_cost, 3) if (p := d.coordinator.data) and p.export_prices_complete else None,
     ),
     PlanSensorDescription(
         key="plan_savings",
         device_class=SensorDeviceClass.MONETARY,
         native_unit_of_measurement="EUR",
         suggested_display_precision=2,
-        value_fn=lambda d: round(p.savings, 3) if (p := d.coordinator.data) else None,
+        value_fn=lambda d: round(p.savings, 3) if (p := d.coordinator.data) and p.export_prices_complete else None,
     ),
     PlanSensorDescription(
         key="cost_today",
@@ -111,7 +111,9 @@ SENSORS: tuple[PlanSensorDescription, ...] = (
         native_unit_of_measurement="EUR",
         state_class=SensorStateClass.TOTAL,
         suggested_display_precision=2,
-        value_fn=lambda d: round(d.history.actual_cost_since(_today_start()), 3),
+        value_fn=lambda d: (
+            round(cost, 3) if (cost := d.history.actual_cost_since(_today_start())) is not None else None
+        ),
     ),
 )
 
@@ -149,6 +151,11 @@ class PlanValueSensor(EnergyControlEntity, SensorEntity):
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
         """Reason for the current action."""
+        if self.entity_description.key == "cost_today":
+            return {
+                "coverage": self.data.history.coverage_since(_today_start()),
+                "observed_cost": self.data.history.observed_cost_since(_today_start()),
+            }
         if self.entity_description.key != "action":
             return None
         slot = _current(self.data)
@@ -184,11 +191,13 @@ class PlanSensor(EnergyControlEntity, SensorEntity):
         return {
             "summary": {
                 "slots": len(plan.slots),
+                "feasible": plan.feasible,
+                "export_prices_complete": plan.export_prices_complete,
                 "horizon_end": plan.slots[-1].start.isoformat() if plan.slots else None,
-                "cost": round(plan.total_cost, 3),
-                "baseline_cost": round(plan.baseline_cost, 3),
+                "cost": round(plan.total_cost, 3) if plan.export_prices_complete else None,
+                "baseline_cost": round(plan.baseline_cost, 3) if plan.export_prices_complete else None,
                 "wear_cost": round(plan.wear_cost, 3),
-                "savings": round(plan.savings, 3),
+                "savings": round(plan.savings, 3) if plan.export_prices_complete else None,
             },
             "forecast": [
                 {

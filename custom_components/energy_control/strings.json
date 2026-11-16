@@ -3,7 +3,7 @@
     "step": {
       "prices": {
         "title": "Electricity prices",
-        "description": "Sensor with a price forecast in its attributes (Tibber Prices, Nord Pool, ENTSO-e, EnergyZero, ...). Export compensation: 'netting' (export = import, e.g. NL saldering) switches to 'spot' after the netting end date.",
+        "description": "Choose a forecast sensor, or a core Nord Pool integration and market area. Native Nord Pool uses EUR spot prices; configure markup, energy tax and VAT. Netting switches to spot compensation on its end date. Spot export requires a raw energy component or a source explicitly configured as spot-only.",
         "data": {
           "price_entity": "Price forecast sensor",
           "price_includes_taxes": "Prices include taxes and fees",
@@ -14,7 +14,9 @@
           "netting_end": "Netting (saldering) ends on",
           "export_factor": "Export factor on spot price",
           "export_fee": "Export fee (subtracted)",
-          "export_fixed": "Fixed export price"
+          "export_fixed": "Fixed export price",
+          "nordpool_entry": "Core Nord Pool integration (optional)",
+          "nordpool_area": "Nord Pool market area (e.g. NL)"
         }
       },
       "pv": {
@@ -48,12 +50,14 @@
           "load_fallback_w": "Fallback load",
           "grid_power_entity": "Grid power sensor (+ import)",
           "max_import_w": "Max grid import",
-          "max_export_w": "Max grid export"
+          "max_export_w": "Max grid export",
+          "import_energy_entity": "Cumulative grid import (optional, select both meters)",
+          "export_energy_entity": "Cumulative grid export (optional, select both meters)"
         }
       },
       "control": {
         "title": "Victron ESS control",
-        "description": "Entities to control (core Victron GX integration suggestions are pre-filled). Leave the grid setpoint empty for advisory-only use. The PV limiter is used to curtail an AC-coupled PV inverter at negative prices.",
+        "description": "Automatic control requires a grid setpoint and charge, inverter and feed-in limits. Incomplete setups remain advisory with an explanation in Repairs. A configured DESS mode must acknowledge off before ESS commands are sent.",
         "data": {
           "setpoint_entity": "ESS grid setpoint",
           "charge_limit_entity": "ESS max charge power",
@@ -70,7 +74,9 @@
     },
     "error": {
       "entity_not_found": "Entity not found",
-      "no_price_forecast": "No price forecast found in the attributes of this sensor"
+      "no_price_forecast": "No price forecast found in the attributes of this sensor",
+      "invalid_price_unit": "Use prices in EUR/kWh, EUR/MWh or ct/kWh.",
+      "invalid_nordpool": "Select a valid core Nord Pool integration and a market area."
     },
     "abort": {}
   },
@@ -88,7 +94,7 @@
       },
       "prices": {
         "title": "Electricity prices",
-        "description": "Sensor with a price forecast in its attributes (Tibber Prices, Nord Pool, ENTSO-e, EnergyZero, ...). Export compensation: 'netting' (export = import, e.g. NL saldering) switches to 'spot' after the netting end date.",
+        "description": "Choose a forecast sensor, or a core Nord Pool integration and market area. Native Nord Pool uses EUR spot prices; configure markup, energy tax and VAT. Netting switches to spot compensation on its end date. Spot export requires a raw energy component or a source explicitly configured as spot-only.",
         "data": {
           "price_entity": "Price forecast sensor",
           "price_includes_taxes": "Prices include taxes and fees",
@@ -99,7 +105,9 @@
           "netting_end": "Netting (saldering) ends on",
           "export_factor": "Export factor on spot price",
           "export_fee": "Export fee (subtracted)",
-          "export_fixed": "Fixed export price"
+          "export_fixed": "Fixed export price",
+          "nordpool_entry": "Core Nord Pool integration (optional)",
+          "nordpool_area": "Nord Pool market area (e.g. NL)"
         }
       },
       "pv": {
@@ -133,12 +141,14 @@
           "load_fallback_w": "Fallback load",
           "grid_power_entity": "Grid power sensor (+ import)",
           "max_import_w": "Max grid import",
-          "max_export_w": "Max grid export"
+          "max_export_w": "Max grid export",
+          "import_energy_entity": "Cumulative grid import (optional, select both meters)",
+          "export_energy_entity": "Cumulative grid export (optional, select both meters)"
         }
       },
       "control": {
         "title": "Victron ESS control",
-        "description": "Entities to control (core Victron GX integration suggestions are pre-filled). Leave the grid setpoint empty for advisory-only use. The PV limiter is used to curtail an AC-coupled PV inverter at negative prices.",
+        "description": "Automatic control requires a grid setpoint and charge, inverter and feed-in limits. Incomplete setups remain advisory with an explanation in Repairs. A configured DESS mode must acknowledge off before ESS commands are sent.",
         "data": {
           "setpoint_entity": "ESS grid setpoint",
           "charge_limit_entity": "ESS max charge power",
@@ -155,7 +165,9 @@
     },
     "error": {
       "entity_not_found": "Entity not found",
-      "no_price_forecast": "No price forecast found in the attributes of this sensor"
+      "no_price_forecast": "No price forecast found in the attributes of this sensor",
+      "invalid_price_unit": "Use prices in EUR/kWh, EUR/MWh or ct/kWh.",
+      "invalid_nordpool": "Select a valid core Nord Pool integration and a market area."
     }
   },
   "selector": {
@@ -322,7 +334,7 @@
   "issues": {
     "control_failed": {
       "title": "Energy Control cannot control the ESS",
-      "description": "Writing to the Victron entities failed: {error}. The system falls back to its own ESS settings until this is resolved."
+      "description": "ESS commands are paused: {error}. Check actuator availability, power units and ranges, and DESS readback. Original settings remain saved for recovery."
     },
     "load_fallback_no_entity": {
       "title": "Energy Control has no consumption history",
@@ -331,6 +343,18 @@
     "load_fallback_no_history": {
       "title": "Energy Control found no consumption history",
       "description": "The recorder has no hourly statistics for {entity_id}, so every plan assumes a flat household load of {fallback_w} W. Make sure the sensor has a state class (measurement for power, total/total_increasing for energy) and is recorded; the forecast is rebuilt every few hours."
+    },
+    "export_price_missing": {
+      "title": "Raw export price is missing",
+      "description": "Your contract uses spot compensation or switches to it within 60 days. The all-in source has no raw energy price. Supply a source with a spot component, explicitly configure a spot-only source, or choose the contracted fixed export price. Price-dependent battery export is blocked where the price is unknown; incomplete costs and savings are hidden."
+    },
+    "pending_restores": {
+      "title": "Replaced actuators still need restoring",
+      "description": "These original settings are persisted and retried every 30 seconds until readback confirms restoration. Check availability and units, or restore these exact values manually: {restores}"
+    },
+    "grid_constraints": {
+      "title": "Forecast grid limits cannot be satisfied",
+      "description": "Forecast demand exceeds the configured grid limit even with available battery assistance. Inspect grid_violation_kw and each slot reason. Check demand, battery capabilities and grid limits. The planner retains available assistance and explicitly reports unavoidable overload."
     }
   },
   "exceptions": {

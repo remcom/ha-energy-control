@@ -3,7 +3,7 @@
     "step": {
       "prices": {
         "title": "Stroomprijzen",
-        "description": "Sensor met een prijsverwachting in de attributen (Tibber Prices, Nord Pool, ENTSO-e, EnergyZero, ...). Terugleververgoeding: 'saldering' (teruglevering = inkoopprijs) gaat na de einddatum over op 'spot'.",
+        "description": "Kies een prijssensor met prognoses, of de core Nord Pool-integratie en een marktgebied. Nord Pool levert spotprijzen in EUR; vul opslag, energiebelasting en btw in. Salderen schakelt op de einddatum naar spotvergoeding. Daarvoor is een ruwe spotprijs nodig; een all-in inkoopprijs is geen terugleverprijs.",
         "data": {
           "price_entity": "Prijsverwachting-sensor",
           "price_includes_taxes": "Prijzen inclusief belastingen",
@@ -14,7 +14,9 @@
           "netting_end": "Saldering eindigt op",
           "export_factor": "Factor op spotprijs",
           "export_fee": "Terugleverkosten (afgetrokken)",
-          "export_fixed": "Vaste terugleverprijs"
+          "export_fixed": "Vaste terugleverprijs",
+          "nordpool_entry": "Nord Pool-integratie (optioneel)",
+          "nordpool_area": "Nord Pool-marktgebied (bijv. NL)"
         }
       },
       "pv": {
@@ -48,12 +50,14 @@
           "load_fallback_w": "Standaard verbruik",
           "grid_power_entity": "Netvermogen-sensor (+ afname)",
           "max_import_w": "Max netafname",
-          "max_export_w": "Max teruglevering"
+          "max_export_w": "Max teruglevering",
+          "import_energy_entity": "Cumulatieve netafname (optioneel, beide meters kiezen)",
+          "export_energy_entity": "Cumulatieve teruglevering (optioneel, beide meters kiezen)"
         }
       },
       "control": {
         "title": "Victron ESS aansturing",
-        "description": "Te sturen entiteiten (suggesties van de Victron GX-integratie zijn ingevuld). Laat het setpoint leeg voor alleen-advies. De PV-begrenzer knijpt een AC-gekoppelde omvormer af bij negatieve prijzen.",
+        "description": "Automatische besturing vereist een netsetpoint en laad-, ontlaad- en terugleverlimieten. Zonder deze actuatoren blijft de installatie adviserend. Een geconfigureerde DESS-modus moet uitgeschakeld zijn en dit bevestigen voordat ESS-opdrachten worden verstuurd.",
         "data": {
           "setpoint_entity": "ESS net-setpoint",
           "charge_limit_entity": "ESS max laadvermogen",
@@ -70,7 +74,9 @@
     },
     "error": {
       "entity_not_found": "Entiteit niet gevonden",
-      "no_price_forecast": "Geen prijsverwachting gevonden in de attributen van deze sensor"
+      "no_price_forecast": "Geen prijsverwachting gevonden in de attributen van deze sensor",
+      "invalid_price_unit": "Gebruik prijzen in EUR/kWh, EUR/MWh of ct/kWh.",
+      "invalid_nordpool": "Kies een geldige Nord Pool-integratie en een marktgebied."
     },
     "abort": {}
   },
@@ -88,7 +94,7 @@
       },
       "prices": {
         "title": "Stroomprijzen",
-        "description": "Sensor met een prijsverwachting in de attributen (Tibber Prices, Nord Pool, ENTSO-e, EnergyZero, ...). Terugleververgoeding: 'saldering' (teruglevering = inkoopprijs) gaat na de einddatum over op 'spot'.",
+        "description": "Kies een prijssensor met prognoses, of de core Nord Pool-integratie en een marktgebied. Nord Pool levert spotprijzen in EUR; vul opslag, energiebelasting en btw in. Salderen schakelt op de einddatum naar spotvergoeding. Daarvoor is een ruwe spotprijs nodig; een all-in inkoopprijs is geen terugleverprijs.",
         "data": {
           "price_entity": "Prijsverwachting-sensor",
           "price_includes_taxes": "Prijzen inclusief belastingen",
@@ -99,7 +105,9 @@
           "netting_end": "Saldering eindigt op",
           "export_factor": "Factor op spotprijs",
           "export_fee": "Terugleverkosten (afgetrokken)",
-          "export_fixed": "Vaste terugleverprijs"
+          "export_fixed": "Vaste terugleverprijs",
+          "nordpool_entry": "Nord Pool-integratie (optioneel)",
+          "nordpool_area": "Nord Pool-marktgebied (bijv. NL)"
         }
       },
       "pv": {
@@ -133,12 +141,14 @@
           "load_fallback_w": "Standaard verbruik",
           "grid_power_entity": "Netvermogen-sensor (+ afname)",
           "max_import_w": "Max netafname",
-          "max_export_w": "Max teruglevering"
+          "max_export_w": "Max teruglevering",
+          "import_energy_entity": "Cumulatieve netafname (optioneel, beide meters kiezen)",
+          "export_energy_entity": "Cumulatieve teruglevering (optioneel, beide meters kiezen)"
         }
       },
       "control": {
         "title": "Victron ESS aansturing",
-        "description": "Te sturen entiteiten (suggesties van de Victron GX-integratie zijn ingevuld). Laat het setpoint leeg voor alleen-advies. De PV-begrenzer knijpt een AC-gekoppelde omvormer af bij negatieve prijzen.",
+        "description": "Automatische besturing vereist een netsetpoint en laad-, ontlaad- en terugleverlimieten. Zonder deze actuatoren blijft de installatie adviserend. Een geconfigureerde DESS-modus moet uitgeschakeld zijn en dit bevestigen voordat ESS-opdrachten worden verstuurd.",
         "data": {
           "setpoint_entity": "ESS net-setpoint",
           "charge_limit_entity": "ESS max laadvermogen",
@@ -155,7 +165,9 @@
     },
     "error": {
       "entity_not_found": "Entiteit niet gevonden",
-      "no_price_forecast": "Geen prijsverwachting gevonden in de attributen van deze sensor"
+      "no_price_forecast": "Geen prijsverwachting gevonden in de attributen van deze sensor",
+      "invalid_price_unit": "Gebruik prijzen in EUR/kWh, EUR/MWh of ct/kWh.",
+      "invalid_nordpool": "Kies een geldige Nord Pool-integratie en een marktgebied."
     }
   },
   "selector": {
@@ -322,7 +334,7 @@
   "issues": {
     "control_failed": {
       "title": "Energy Control kan de ESS niet aansturen",
-      "description": "Schrijven naar de Victron-entiteiten mislukte: {error}. Het systeem valt terug op de eigen ESS-instellingen tot dit is opgelost."
+      "description": "ESS-besturing is onderbroken: {error}. Controleer beschikbaarheid, vermogenseenheden en limieten, en de DESS-terugmelding. Oorspronkelijke instellingen blijven bewaard voor herstel."
     },
     "load_fallback_no_entity": {
       "title": "Energy Control heeft geen verbruikshistorie",
@@ -331,6 +343,18 @@
     "load_fallback_no_history": {
       "title": "Energy Control vindt geen verbruikshistorie",
       "description": "De recorder heeft geen uurstatistieken voor {entity_id}, dus elk plan gaat uit van een vast huisverbruik van {fallback_w} W. Controleer dat de sensor een state class heeft (measurement voor vermogen, total/total_increasing voor energie) en wordt vastgelegd; de voorspelling wordt om de paar uur opnieuw opgebouwd."
+    },
+    "export_price_missing": {
+      "title": "Ruwe terugleverprijs ontbreekt",
+      "description": "Het contract gebruikt spotvergoeding of schakelt hier binnen 60 dagen naar over. De all-in bron levert geen ruwe energieprijs. Kies een bron met spotprijzen, configureer de bron expliciet als spot-only of stel een vaste terugleververgoeding in. Batterijexport op basis van onbekende prijzen is geblokkeerd; onvolledige kosten en besparingen worden niet getoond."
+    },
+    "pending_restores": {
+      "title": "Herstel van vervangen actuatoren staat open",
+      "description": "Deze oorspronkelijke instellingen worden blijvend bewaard en elke 30 seconden opnieuw geprobeerd. De melding verdwijnt pas na bevestigde terugmelding. Controleer beschikbaarheid en eenheden, of herstel de getoonde waarden handmatig: {restores}"
+    },
+    "grid_constraints": {
+      "title": "Verwachte netlimieten zijn niet haalbaar",
+      "description": "De voorspelde vraag overschrijdt de ingestelde netlimiet, ook met beschikbare batterijondersteuning. Bekijk grid_violation_kw en de reden per tijdslot. Controleer verbruik, batterijcapaciteit en netlimieten. De planner blijft beschikbare ondersteuning inzetten en geeft de overschrijding expliciet aan."
     }
   },
   "exceptions": {

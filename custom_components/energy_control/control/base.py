@@ -70,11 +70,11 @@ def desired_for(
 
     if action == Action.CHARGE_GRID:
         setpoint = limits.max_import
-        charge = min(limits.max_charge, max(100.0, round(battery_kw * 1000, -1)))
+        charge = min(limits.max_charge, max(0.0, battery_kw * 1000))
     elif action == Action.DISCHARGE_GRID:
         setpoint = -limits.max_export
         ac_w = -battery_kw * 1000 * limits.discharge_efficiency
-        discharge = min(limits.max_discharge, max(100.0, round(ac_w, -1)))
+        discharge = min(limits.max_discharge, max(0.0, ac_w))
     elif action == Action.HOLD:
         discharge = 0.0
         if grid_kw < 0 and abs(battery_kw) < 1e-3:

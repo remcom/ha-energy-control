@@ -56,6 +56,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: EnergyControlConfigEntry
     try:
         await coordinator.async_setup()
         await history.async_load()
+        coordinator.history = history
         entry.runtime_data = EnergyControlData(coordinator, controller, history)
 
         # First plan; failures are tolerated (controller falls back to self consumption).
@@ -93,5 +94,5 @@ async def async_unload_entry(hass: HomeAssistant, entry: EnergyControlConfigEntr
 
 async def async_remove_entry(hass: HomeAssistant, entry: EnergyControlConfigEntry) -> None:
     """Delete the entry's stores (control was already released on unload)."""
-    for suffix in ("settings", "history", "originals"):
+    for suffix in ("settings", "history", "originals", "pending_restores"):
         await Store(hass, 1, f"{DOMAIN}.{entry.entry_id}.{suffix}").async_remove()

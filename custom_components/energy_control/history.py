@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from math import isfinite
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -29,6 +30,11 @@ class _Accumulator:
     battery_samples: float = 0.0
     soc_end: float | None = None
     curtailed: bool = False
+    load_ws: float = 0.0
+    pv_ws: float = 0.0
+    load_samples: float = 0.0
+    pv_samples: float = 0.0
+    meter_based: bool = False
     last: datetime | None = None
 
 
@@ -40,10 +46,19 @@ class History:
         self._store: Store[list[dict[str, Any]]] = Store(hass, 1, f"{DOMAIN}.{entry_id}.history")
         self.records: list[dict[str, Any]] = []
         self._acc: _Accumulator | None = None
+        self._previous: tuple[float | None, ...] = (None, None, None, None)
+        self._previous_meters: tuple[float | None, float | None] = (None, None)
+        self._last_sample: datetime | None = None
 
     async def async_load(self) -> None:
         """Load from disk."""
         self.records = await self._store.async_load() or []
+        for record in self.records:
+            if "sampled_seconds" not in record:
+                record["extrapolated_cost"] = record.get("actual_cost")
+                record["actual_cost"] = None
+                record["coverage"] = 0.0
+                record["measurement_method"] = "legacy_extrapolated"
 
     def sample(
         self,
@@ -55,11 +70,45 @@ class History:
         battery_w: float | None,
         soc_pct: float | None,
         curtailing: bool,
+        load_w: float | None = None,
+        pv_w: float | None = None,
+        import_kwh: float | None = None,
+        export_kwh: float | None = None,
+        meters_configured: bool = False,
     ) -> dict[str, Any] | None:
         """Add a measurement; returns the closed record when a slot ends."""
         closed = None
+        # Keep malformed measurements out of accounting, even for direct callers.
+        grid_w, battery_w, load_w, pv_w, import_kwh, export_kwh = (
+            value if value is not None and isfinite(value) else None
+            for value in (grid_w, battery_w, load_w, pv_w, import_kwh, export_kwh)
+        )
+        meter_w = None
+        elapsed = (now - self._last_sample).total_seconds() if self._last_sample else 0
+        if meters_configured and 0 < elapsed < 120:
+            old_import, old_export = self._previous_meters
+            if (
+                old_import is not None
+                and old_export is not None
+                and import_kwh is not None
+                and export_kwh is not None
+                and import_kwh >= old_import
+                and export_kwh >= old_export
+            ):
+                meter_w = ((import_kwh - old_import) * 3600000 / elapsed, (export_kwh - old_export) * 3600000 / elapsed)
+        self._previous_meters = (import_kwh, export_kwh)
+        self._last_sample = now
+        current = (grid_w, battery_w, load_w, pv_w)
+        values = tuple(old if new is not None else None for old, new in zip(self._previous, current, strict=True))
         slot_start = floor_slot(now)
+        continuous_boundary = False
         if self._acc is not None and self._acc.start != slot_start:
+            end = self._acc.start + timedelta(minutes=SLOT_MINUTES)
+            # Close the observed tail using the last reading, only across a
+            # short reporting gap. Long gaps are explicitly unobserved.
+            if self._acc.last and 0 < (now - self._acc.last).total_seconds() < 120:
+                self._integrate(self._acc, (end - self._acc.last).total_seconds(), values, meters_configured, meter_w)
+                continuous_boundary = True
             closed = self._close(self._acc)
             self._acc = None
         if self._acc is None:
@@ -67,36 +116,65 @@ class History:
                 start=slot_start,
                 planned=_planned_snapshot(planned),
                 mode=mode,
+                meter_based=meters_configured,
+                last=slot_start if continuous_boundary else None,
             )
         acc = self._acc
         dt_s = (now - acc.last).total_seconds() if acc.last else 0.0
         acc.last = now
         if 0 < dt_s < 120:
-            acc.seconds += dt_s
-            if grid_w is not None:
-                acc.grid_ws += grid_w * dt_s
-                acc.import_ws += max(grid_w, 0.0) * dt_s
-                acc.export_ws += max(-grid_w, 0.0) * dt_s
-                acc.grid_samples += dt_s
-            if battery_w is not None:
-                acc.battery_ws += battery_w * dt_s
-                acc.battery_samples += dt_s
+            # Both endpoints must be available; missing samples are not zero.
+            self._integrate(acc, dt_s, values, meters_configured, meter_w)
+        self._previous = current
         if soc_pct is not None:
             acc.soc_end = soc_pct
         acc.curtailed = acc.curtailed or curtailing
         return closed
 
+    @staticmethod
+    def _integrate(
+        acc: _Accumulator,
+        seconds: float,
+        values: tuple[float | None, ...],
+        meters_configured: bool = False,
+        meter_w: tuple[float, float] | None = None,
+    ) -> None:
+        if seconds <= 0:
+            return
+        grid, battery, load, pv = values
+        acc.seconds += seconds
+        if meters_configured:
+            if meter_w is not None:
+                imp, exp = meter_w
+                acc.grid_ws += (imp - exp) * seconds
+                acc.import_ws += imp * seconds
+                acc.export_ws += exp * seconds
+                acc.grid_samples += seconds
+        elif grid is not None:
+            acc.grid_ws += grid * seconds
+            acc.import_ws += max(grid, 0.0) * seconds
+            acc.export_ws += max(-grid, 0.0) * seconds
+            acc.grid_samples += seconds
+        if battery is not None:
+            acc.battery_ws += battery * seconds
+            acc.battery_samples += seconds
+        if load is not None:
+            acc.load_ws += max(load, 0.0) * seconds
+            acc.load_samples += seconds
+        if pv is not None:
+            acc.pv_ws += max(pv, 0.0) * seconds
+            acc.pv_samples += seconds
+
     def _close(self, acc: _Accumulator) -> dict[str, Any]:
         planned = acc.planned or {}
         grid_kw = acc.grid_ws / acc.grid_samples / 1000 if acc.grid_samples else None
         battery_kw = acc.battery_ws / acc.battery_samples / 1000 if acc.battery_samples else None
-        hours = SLOT_MINUTES / 60
         actual_cost = None
-        if acc.grid_samples and planned:
+        if acc.grid_samples and planned and planned.get("export_price_known", True):
             # Import and export are priced separately: a slot can contain both.
-            # Average power over the sampled time, extrapolated to the full slot.
-            import_kwh = acc.import_ws / acc.grid_samples / 1000 * hours
-            export_kwh = acc.export_ws / acc.grid_samples / 1000 * hours
+            # Only measured energy contributes; extrapolation is a separate field.
+            import_kwh = acc.import_ws / 3600000
+            export_kwh = acc.export_ws / 3600000
             actual_cost = import_kwh * planned["import_price"] - export_kwh * planned["export_price"]
         record = {
             "start": acc.start.isoformat(),
@@ -107,7 +185,27 @@ class History:
             "actual_grid_kw": _round(grid_kw),
             "actual_battery_kw": _round(battery_kw),
             "actual_soc": _round(acc.soc_end),
-            "actual_cost": _round(actual_cost),
+            "actual_cost": _round(actual_cost, 6),  # observed energy only
+            "measurement_method": "cumulative_meters" if acc.meter_based else "power_samples",
+            "sampled_seconds": acc.grid_samples,
+            "coverage": round(acc.grid_samples / (SLOT_MINUTES * 60), 4),
+            "observed_import_kwh": _round(acc.import_ws / 3600000 if acc.grid_samples else None, 6),
+            "observed_export_kwh": _round(acc.export_ws / 3600000 if acc.grid_samples else None, 6),
+            "extrapolated_cost": _round(
+                actual_cost * SLOT_MINUTES * 60 / acc.grid_samples if actual_cost is not None else None, 6
+            ),
+            "actual_load_kw": _round(acc.load_ws / acc.load_samples / 1000 if acc.load_samples else None),
+            "actual_pv_kw": _round(acc.pv_ws / acc.pv_samples / 1000 if acc.pv_samples else None),
+            "load_coverage": round(acc.load_samples / (SLOT_MINUTES * 60), 4),
+            "pv_coverage": round(acc.pv_samples / (SLOT_MINUTES * 60), 4),
+            "load_error_kw": _round(
+                acc.load_ws / acc.load_samples / 1000 - planned["load_kw"]
+                if acc.load_samples and "load_kw" in planned
+                else None
+            ),
+            "pv_error_kw": _round(
+                acc.pv_ws / acc.pv_samples / 1000 - planned["pv_kw"] if acc.pv_samples and "pv_kw" in planned else None
+            ),
             "curtailed": acc.curtailed,
         }
         self.records.append(record)
@@ -125,9 +223,42 @@ class History:
                 result.append(record)
         return result
 
-    def actual_cost_since(self, start: datetime) -> float:
-        """Realised cost (EUR) of closed slots since `start`."""
-        return sum(r["actual_cost"] or 0.0 for r in self.since(start))
+    def coverage_since(self, start: datetime) -> float:
+        """Fraction of elapsed closed quarters actually measured."""
+        end = floor_slot(dt_util.utcnow())
+        expected = max(0.0, (end - start).total_seconds())
+        return min(1.0, sum(r.get("sampled_seconds", 0) for r in self.since(start)) / expected) if expected else 0.0
+
+    def observed_cost_since(self, start: datetime) -> float | None:
+        """Cost of measured energy only; None when nothing was priced."""
+        values = [r["actual_cost"] for r in self.since(start) if r.get("actual_cost") is not None]
+        return sum(values) if values else None
+
+    def actual_cost_since(self, start: datetime) -> float | None:
+        """Daily total only when every elapsed closed interval has coverage."""
+        records = self.since(start)
+        expected = int(max(0, (floor_slot(dt_util.utcnow()) - start).total_seconds()) / (SLOT_MINUTES * 60))
+        if (
+            not records
+            or len({r["start"] for r in records}) != expected
+            or any(r.get("actual_cost") is None or r.get("coverage", 0) < 0.98 for r in records)
+        ):
+            return None
+        return self.observed_cost_since(start)
+
+    def recent_load_factor(self, now: datetime) -> float:
+        """Bounded correction after at least 20 well-observed quarters."""
+        rows = [
+            r
+            for r in self.since(now - timedelta(hours=12))
+            if r.get("load_coverage", 0) >= 0.95
+            and r.get("actual_load_kw") is not None
+            and r.get("planned_load_kw", 0) > 0.05
+        ]
+        if len(rows) < 20:
+            return 1.0
+        ratio = sum(r["actual_load_kw"] for r in rows) / sum(r["planned_load_kw"] for r in rows)
+        return max(0.8, min(1.2, ratio))
 
     def planned_cost_since(self, start: datetime) -> float:
         """Planned cost (EUR) of closed slots since `start`."""
@@ -141,6 +272,9 @@ def _planned_snapshot(slot: SlotPlan | None) -> dict[str, Any] | None:
         "action": str(slot.action),
         "battery_kw": round(slot.battery_kw, 3),
         "grid_kw": round(slot.grid_kw, 3),
+        "load_kw": round(slot.load_kw, 3),
+        "pv_kw": round(slot.pv_kw, 3),
+        "export_price_known": slot.export_price_known,
         "soc": round(slot.soc_end_pct, 2),
         "cost": round(slot.cost / slot.hours * SLOT_MINUTES / 60, 5) if slot.hours else 0.0,
         "import_price": round(slot.import_price, 5),

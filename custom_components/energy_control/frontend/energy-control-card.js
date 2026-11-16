@@ -299,7 +299,10 @@ class EnergyControlCard extends HTMLElement {
             <tr><td>Battery</td><td>${kw(r.planned_battery_kw)}</td><td>${kw(r.actual_battery_kw)}</td></tr>
             <tr><td>Grid</td><td>${kw(r.planned_grid_kw)}</td><td>${kw(r.actual_grid_kw)}</td></tr>
             <tr><td>SoC</td><td>${r.planned_soc?.toFixed?.(0) ?? "–"}%</td><td>${r.actual_soc?.toFixed?.(0) ?? "–"}%</td></tr>
-            <tr><td>Cost</td><td>${eur(r.planned_cost)}</td><td>${eur(r.actual_cost)}</td></tr></table>
+            <tr><td>Cost (observed)</td><td>${eur(r.planned_cost)}</td><td>${eur(r.actual_cost)}</td></tr></table>
+          <div>Measured coverage ${r.coverage == null ? "unknown" : `${(r.coverage * 100).toFixed(0)}%`}</div>
+          ${r.extrapolated_cost != null && r.coverage < 0.98 ? `<div>Full-slot estimate ${eur(r.extrapolated_cost)}</div>` : ""}
+          <div>Load error ${kw(r.load_error_kw)} · PV error ${kw(r.pv_error_kw)}</div>
           <div class="muted">Import ${ct(r.import_price)} · mode ${esc(r.mode)}${r.curtailed ? " · curtailed" : ""}</div>`,
       })),
       ...future.map((s) => ({
@@ -311,7 +314,7 @@ class EnergyControlCard extends HTMLElement {
           <div>Battery ${kw(s.battery_kw)} · Grid ${kw(s.grid_kw)}</div>
           <div>PV ${kw(s.pv_kw)} · Load ${kw(s.load_kw)}</div>
           ${s.curtail_kw > 0 ? `<div>Curtail ${kw(s.curtail_kw)}</div>` : ""}
-          <div>Import ${ct(s.import_price)} · Export ${ct(s.export_price)}</div>
+          <div>Import ${ct(s.import_price)} · Export ${ct(s.export_price_known === false ? null : s.export_price)}</div>
           <div>SoC → ${s.soc_end_pct.toFixed(0)}%</div>`,
       })),
     ];
@@ -442,10 +445,15 @@ class EnergyControlCard extends HTMLElement {
       ["Grid charge windows", windows("charge_grid")],
       ["Grid discharge windows", windows("discharge_grid")],
       ["Hold windows", windows("hold")],
+      ["Grid constraints", plan?.feasible === false ? "Unavoidable overload — inspect slot reasons" : "Within forecast limits"],
+      ["Export tariff", plan?.export_prices_complete === false ? "Missing spot price — check Repairs" : "Known"],
       ["Planned cost (horizon)", eur(plan?.total_cost)],
       ["Without battery", eur(plan?.baseline_cost)],
       ["Planned savings", eur(plan?.savings)],
       ["Cost today (actual / planned)", `${eur(d.cost_today)} / ${eur(d.planned_cost_today)}`],
+      ["Measured coverage today", `${((d.coverage_today ?? 0) * 100).toFixed(0)}%`],
+      ["Observed cost today (partial)", eur(d.observed_cost_today)],
+      ["Pending restores", Object.keys(d.pending_restores ?? {}).map(esc).join(", ") || "none"],
       ["Strategies", ["grid_charge", "battery_to_grid", "curtail_negative"].filter((k) => d.settings?.[k]).join(", ") || "none"],
       ["Wear cost / margin", `${esc(d.settings?.cycle_cost)} / ${esc(d.settings?.arbitrage_margin)} ct/kWh`],
     ];
