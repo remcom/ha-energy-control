@@ -324,6 +324,14 @@
     "control_failed": {
       "title": "Energy Control kan de ESS niet aansturen",
       "description": "Schrijven naar de Victron-entiteiten mislukte: {error}. Het systeem valt terug op de eigen ESS-instellingen tot dit is opgelost."
+    },
+    "load_fallback_no_entity": {
+      "title": "Energy Control heeft geen verbruikshistorie",
+      "description": "Er is geen verbruikssensor ingesteld, dus elk plan gaat uit van een vast huisverbruik van {fallback_w} W. Plannen kunnen flink afwijken (te weinig energie bewaard voor de avond, verkeerde vasthoud/ontlaad-beslissingen). Kies je verbruikssensor (vermogen of energie) onder Configureren → Verbruik & net (bij Victron: de AC-verbruiksensor)."
+    },
+    "load_fallback_no_history": {
+      "title": "Energy Control vindt geen verbruikshistorie",
+      "description": "De recorder heeft geen uurstatistieken voor {entity_id}, dus elk plan gaat uit van een vast huisverbruik van {fallback_w} W. Controleer dat de sensor een state class heeft (measurement voor vermogen, total/total_increasing voor energie) en wordt vastgelegd; de voorspelling wordt om de paar uur opnieuw opgebouwd."
     }
   },
   "exceptions": {

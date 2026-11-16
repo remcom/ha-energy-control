@@ -58,6 +58,7 @@ from .const import (
     PV_UNIT_PERCENT,
     PV_UNIT_WATT,
 )
+from .coordinator import state_float
 
 STEPS = ("prices", "pv", "battery", "load", "control")
 
@@ -76,6 +77,18 @@ VICTRON_SUGGESTIONS: dict[str, tuple[str, ...]] = {
 }
 
 
+def _has_live_l2(hass: HomeAssistant, l1_entity_id: str, ids: set[str]) -> bool:
+    """True when the L2 sibling of an L1 sensor indicates a multi-phase system.
+
+    The GX also exposes L2/L3 sensors on single-phase systems; they then read
+    exactly 0. An L2 sensor without a state yet counts as multi-phase (safe side).
+    """
+    l2 = l1_entity_id.removesuffix("_l1") + "_l2"
+    if l2 not in ids:
+        return False
+    return state_float(hass, l2) != 0.0
+
+
 def victron_suggestions(hass: HomeAssistant) -> dict[str, str]:
     """Suggest entities from the core victron_gx integration, if present."""
     registry = er.async_get(hass)
@@ -87,7 +100,7 @@ def victron_suggestions(hass: HomeAssistant) -> dict[str, str]:
             if entry.entity_id.startswith(prefix) and entry.entity_id.endswith(suffix):
                 # Per-phase sensors only describe the whole system on a single-phase
                 # installation: on 3-phase systems leave them for the user to pick.
-                if suffix.endswith("_l1") and entry.entity_id.removesuffix("_l1") + "_l2" in ids:
+                if suffix.endswith("_l1") and _has_live_l2(hass, entry.entity_id, ids):
                     break
                 found[key] = entry.entity_id
                 break

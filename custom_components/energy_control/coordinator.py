@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.debounce import Debouncer
 from homeassistant.helpers.event import async_track_state_change_event, async_track_time_change
 from homeassistant.helpers.storage import Store
@@ -256,7 +257,27 @@ class EnergyControlCoordinator(DataUpdateCoordinator[Plan]):
                 _LOGGER.warning("Could not build load profile from %s: %s", entity_id, err)
         self.load_profile = profile
         self._load_profile_at = now
+        self._update_load_issue(entity_id, profile)
         return profile
+
+    def _update_load_issue(self, entity_id: str | None, profile: LoadProfile) -> None:
+        """Flag a load forecast that is only the flat fallback: plans are then far off."""
+        issue_id = f"load_fallback_{self.config_entry.entry_id}"
+        if profile.kw:
+            ir.async_delete_issue(self.hass, DOMAIN, issue_id)
+            return
+        ir.async_create_issue(
+            self.hass,
+            DOMAIN,
+            issue_id,
+            is_fixable=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key="load_fallback_no_entity" if not entity_id else "load_fallback_no_history",
+            translation_placeholders={
+                "fallback_w": str(round(float(self.config[CONF_LOAD_FALLBACK_W]))),
+                "entity_id": entity_id or "",
+            },
+        )
 
     async def _async_profile_from_statistics(
         self, entity_id: str, now: datetime, tz: Any, fallback: float

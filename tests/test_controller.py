@@ -10,6 +10,7 @@ from homeassistant.const import EVENT_HOMEASSISTANT_STOP, STATE_UNAVAILABLE
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import async_mock_service
@@ -23,6 +24,7 @@ from custom_components.energy_control.const import (
 )
 from custom_components.energy_control.history import History
 from custom_components.energy_control.optimizer import Action, SlotPlan
+from custom_components.energy_control.providers.load import LoadProfile
 
 from .common import (
     CHARGE,
@@ -348,6 +350,30 @@ async def test_suggestions_use_l1_on_single_phase(hass: HomeAssistant) -> None:
     """On a single-phase system the L1 sensor is the whole system."""
     _victron(hass, "sensor", "gx_consumption_power_l1")
     assert victron_suggestions(hass)[CONF_LOAD_ENTITY] == "sensor.gx_consumption_power_l1"
+
+
+async def test_suggestions_use_l1_when_gx_l2_reads_zero(hass: HomeAssistant) -> None:
+    """A single-phase GX also exposes L2 sensors, reading 0: L1 is still the whole system."""
+    _victron(hass, "sensor", "gx_consumption_power_l1")
+    _victron(hass, "sensor", "gx_consumption_power_l2")
+    hass.states.async_set("sensor.gx_consumption_power_l2", "0.0", {"unit_of_measurement": "W"})
+    assert victron_suggestions(hass)[CONF_LOAD_ENTITY] == "sensor.gx_consumption_power_l1"
+
+    hass.states.async_set("sensor.gx_consumption_power_l2", "350", {"unit_of_measurement": "W"})
+    assert CONF_LOAD_ENTITY not in victron_suggestions(hass)
+
+
+# --- load forecast -----------------------------------------------------------------
+async def test_repair_issue_when_load_forecast_is_fallback(hass: HomeAssistant, entry, setup) -> None:
+    """Without consumption history the flat fallback is flagged, and the flag clears with history."""
+    issue_id = f"load_fallback_{entry.entry_id}"
+    issue = ir.async_get(hass).async_get_issue(DOMAIN, issue_id)
+    assert issue is not None
+    assert issue.translation_key == "load_fallback_no_entity"
+
+    coordinator = entry.runtime_data.coordinator
+    coordinator._update_load_issue("sensor.load", LoadProfile(tz=dt_util.UTC, kw={(False, 12): 0.9}))
+    assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is None
 
 
 # --- reload ------------------------------------------------------------------------

@@ -324,6 +324,14 @@
     "control_failed": {
       "title": "Energy Control cannot control the ESS",
       "description": "Writing to the Victron entities failed: {error}. The system falls back to its own ESS settings until this is resolved."
+    },
+    "load_fallback_no_entity": {
+      "title": "Energy Control has no consumption history",
+      "description": "No consumption sensor is configured, so every plan assumes a flat household load of {fallback_w} W. Plans can be far off (too little energy saved for the evening, wrong hold/discharge decisions). Select your household consumption power or energy sensor under Configure → Consumption & grid (for Victron: the AC consumption sensor)."
+    },
+    "load_fallback_no_history": {
+      "title": "Energy Control found no consumption history",
+      "description": "The recorder has no hourly statistics for {entity_id}, so every plan assumes a flat household load of {fallback_w} W. Make sure the sensor has a state class (measurement for power, total/total_increasing for energy) and is recorded; the forecast is rebuilt every few hours."
     }
   },
   "exceptions": {
