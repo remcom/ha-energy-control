@@ -12,7 +12,7 @@ takes well under a second in pure Python.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import astuple, dataclass
 from datetime import datetime
 
 from .model import (
@@ -43,6 +43,7 @@ class _Flow:
     curtailed: float
     grid_charged: float
     battery_exported: float
+    overload: float = 0.0
 
 
 def slot_flow(
@@ -51,6 +52,8 @@ def slot_flow(
     battery: BatteryParams,
     grid: GridParams,
     strategy: Strategy,
+    *,
+    allow_overload: bool = False,
 ) -> _Flow | None:
     """Cheapest feasible energy flow for a stored-energy change, or None."""
     if delta_kwh > 0:
@@ -73,7 +76,8 @@ def slot_flow(
         net = load + battery_ac - pv_used
         grid_import = max(net, 0.0)
         grid_export = max(-net, 0.0)
-        if grid_import > max_import + EPS:
+        overload = max(0.0, grid_import - max_import)
+        if overload > EPS and not allow_overload:
             continue
         curtailed = pv - pv_used
         if grid_export > max_export + EPS:
@@ -89,12 +93,13 @@ def slot_flow(
         battery_exported = min(-battery_ac, grid_export) if delta_kwh < 0 else 0.0
         if not strategy.grid_charge and grid_charged > EPS:
             continue
-        if not strategy.battery_to_grid and battery_exported > EPS:
+        if (not strategy.battery_to_grid or not slot.export_price_known) and battery_exported > EPS:
             continue
 
         money = grid_import * slot.import_price - grid_export * slot.export_price
         wear = max(-delta_kwh, 0.0) * battery.cycle_cost
         cost = money + wear + (grid_charged + battery_exported) * strategy.arbitrage_margin
+        cost += overload * 1e6  # minimize unavoidable overload before monetary cost
         if best is None or cost < best.cost - EPS:
             best = _Flow(
                 cost,
@@ -106,6 +111,7 @@ def slot_flow(
                 curtailed,
                 grid_charged,
                 battery_exported,
+                overload,
             )
     return best
 
@@ -146,6 +152,22 @@ def optimize(
     soc_step_pct: float = 1.0,
 ) -> Plan:
     """Compute the cost-optimal battery schedule over `slots`."""
+    for params in (battery, grid, strategy):
+        if any(not math.isfinite(value) for value in astuple(params)):
+            raise ValueError("Nonfinite planning parameter")
+    if (
+        battery.capacity_kwh <= 0
+        or not 0 < battery.charge_efficiency <= 1
+        or not 0 < battery.discharge_efficiency <= 1
+        or not 0 <= battery.min_soc_kwh <= battery.max_soc_kwh <= battery.capacity_kwh
+        or not 0 <= battery.soc_kwh <= battery.capacity_kwh
+        or min(battery.max_charge_kw, battery.max_discharge_kw, grid.max_import_kw, grid.max_export_kw) < 0
+    ):
+        raise ValueError("Invalid battery or grid limits")
+    for slot in slots:
+        values = (slot.hours, slot.import_price, slot.export_price, slot.pv_kwh, slot.load_kwh)
+        if any(not math.isfinite(value) for value in values) or slot.hours <= 0 or min(slot.pv_kwh, slot.load_kwh) < 0:
+            raise ValueError("Invalid forecast interval or nonfinite forecast")
     plan = Plan(created=now, soc_start_kwh=battery.soc_kwh, soc_end_kwh=battery.soc_kwh)
     if not slots:
         return plan
@@ -157,87 +179,96 @@ def optimize(
     k_lo = -math.floor((soc0 - lowest) / step + EPS)
     k_hi = math.floor((highest - soc0) / step + EPS)
     n_states = k_hi - k_lo + 1
-    i0 = -k_lo
     soc_of = [soc0 + (i + k_lo) * step for i in range(n_states)]
 
     tv = terminal_value(slots, battery)
     plan.terminal_value = tv
 
-    # Per-slot cost of each delta (in steps).
-    flows: list[dict[int, _Flow]] = []
+    # Cache state-independent candidates, including exact natural self
+    # consumption and grid assistance even when smaller than one SoC step.
+    flows: list[dict[float, _Flow]] = []
     for slot in slots:
         up = math.floor(battery.max_charge_kw * slot.hours / step + EPS)
         down = math.floor(battery.max_discharge_kw * slot.hours / step + EPS)
-        options: dict[int, _Flow] = {}
-        for d in range(-down, up + 1):
-            flow = slot_flow(slot, d * step, battery, grid, strategy)
+        net = slot.load_kwh - slot.pv_kwh
+        natural = -net / battery.discharge_efficiency if net >= 0 else -net * battery.charge_efficiency
+        assistance = -(net - grid.max_import_kw * slot.hours) / battery.discharge_efficiency
+        deltas = {d * step for d in range(-down, up + 1)}
+        deltas.update((natural, assistance))
+        options: dict[float, _Flow] = {}
+        for delta in sorted(deltas):
+            if not -battery.max_discharge_kw * slot.hours - EPS <= delta <= battery.max_charge_kw * slot.hours + EPS:
+                continue
+            flow = slot_flow(slot, delta, battery, grid, strategy, allow_overload=True)
             if flow is not None:
-                options[d] = flow
-        if 0 not in options:
-            # Idle must always be possible; fall back to unconstrained flow.
-            options[0] = slot_flow(slot, 0.0, battery, GridParams(1e9, 1e9), Strategy())  # type: ignore[assignment]
+                options[delta] = flow
         flows.append(options)
 
-    # Backward pass.
-    n_slots = len(slots)
-    value = [-max(0.0, soc_of[i] - battery.min_soc_kwh) * tv for i in range(n_states)]
-    choice: list[list[int]] = [[0] * n_states for _ in range(n_slots)]
-    # Cost-to-go after each slot: its slope is the value of stored energy,
-    # which classifies "do nothing" slots (hold vs. let the ESS cover the load).
-    after: list[list[float]] = [value] * n_slots
-    for t in range(n_slots - 1, -1, -1):
+    # Backward pass uses interpolation for exact sub-step transitions too.
+    value = [-max(0.0, soc - battery.min_soc_kwh) * tv for soc in soc_of]
+    after: list[list[float]] = [value] * len(slots)
+    for t in range(len(slots) - 1, -1, -1):
         after[t] = value
-        options = flows[t]
-        new_value = [INF] * n_states
-        row = choice[t]
-        for i in range(n_states):
-            soc = soc_of[i]
+        new_value = []
+        for soc in soc_of:
             floor_soc = min(battery.min_soc_kwh, soc) - EPS
             ceil_soc = max(battery.max_soc_kwh, soc) + EPS
             best = INF
-            best_d = 0
-            for d, flow in options.items():
-                j = i + d
-                if j < 0 or j >= n_states:
-                    continue
-                nxt = soc_of[j]
+            for delta, flow in flows[t].items():
+                nxt = soc + delta
                 if nxt < floor_soc or nxt > ceil_soc:
                     continue
-                total = flow.cost + value[j]
-                if total < best - 1e-12:
+                total = flow.cost + _interpolate(value, nxt, soc_of, step)
+                if total < best:
                     best = total
-                    best_d = d
-            new_value[i] = best
-            row[i] = best_d
+            new_value.append(best)
         value = new_value
 
-    # Forward pass: reconstruct the path.
-    i = i0
-    total_cost = 0.0
-    wear_cost = 0.0
+    # Reconstruct at the actual continuous SoC, evaluating exact natural flows
+    # against interpolated future values. Sub-step energy must propagate into
+    # every subsequent slot; changing displayed power alone violates conservation.
+    soc = soc0
     for t, slot in enumerate(slots):
-        d = choice[t][i]
-        flow = flows[t][d]
-        soc_start = soc_of[i]
-        i += d
-        soc_end = soc_of[i]
-        total_cost += flow.money
-        wear_cost += flow.wear
-        plan.slots.append(
-            _slot_plan(slot, d * step, flow, soc_start, soc_end, step, battery, _marginal_values(after[t], i, step))
-        )
-    plan.total_cost = total_cost
-    plan.wear_cost = wear_cost
+        floor_soc = min(soc, battery.min_soc_kwh)
+        ceil_soc = max(soc, battery.max_soc_kwh)
+        lo = max(floor_soc - soc, -battery.max_discharge_kw * slot.hours)
+        hi = min(ceil_soc - soc, battery.max_charge_kw * slot.hours)
+        net = slot.load_kwh - slot.pv_kwh
+        natural = -net / battery.discharge_efficiency if net >= 0 else -net * battery.charge_efficiency
+        assistance = -(net - grid.max_import_kw * slot.hours) / battery.discharge_efficiency
+        deltas = {0.0, lo, hi, max(lo, min(hi, natural)), max(lo, min(hi, assistance))}
+        deltas.update(delta for delta in flows[t] if lo - EPS <= delta <= hi + EPS)
+        best = INF
+        selected: tuple[float, _Flow] | None = None
+        for delta in sorted(deltas):
+            if delta < lo - EPS or delta > hi + EPS:
+                continue
+            flow = slot_flow(slot, delta, battery, grid, strategy, allow_overload=True)
+            if flow is None:
+                continue
+            future = _interpolate(after[t], soc + delta, soc_of, step)
+            objective = flow.cost + future
+            if objective < best - EPS:
+                best = objective
+                selected = delta, flow
+        if selected is None:
+            raise ValueError("No executable battery trajectory")
+        delta, flow = selected
+        plan.slots.append(_slot_plan(slot, delta, flow, soc, soc + delta, step, battery))
+        soc += delta
+    plan.total_cost = sum(slot.cost for slot in plan.slots)
+    plan.wear_cost = sum(slot.wear_cost for slot in plan.slots)
     plan.baseline_cost = baseline_cost(slots)
-    plan.soc_end_kwh = soc_of[i]
+    plan.soc_end_kwh = soc
     return plan
 
 
-def _marginal_values(cost_to_go: list[float], j: int, step: float) -> tuple[float | None, float | None]:
-    """EUR per stored kWh of having one step less / one step more after a slot."""
-    less = (cost_to_go[j - 1] - cost_to_go[j]) / step if j > 0 else None
-    more = (cost_to_go[j] - cost_to_go[j + 1]) / step if j + 1 < len(cost_to_go) else None
-    return less, more
+def _interpolate(values: list[float], soc: float, states: list[float], step: float) -> float:
+    position = max(0.0, min(len(states) - 1.0, (soc - states[0]) / step))
+    low = math.floor(position)
+    high = min(low + 1, len(states) - 1)
+    weight = position - low
+    return values[low] * (1 - weight) + values[high] * weight
 
 
 def _slot_plan(
@@ -248,16 +279,8 @@ def _slot_plan(
     soc_end: float,
     step: float,
     battery: BatteryParams,
-    marginal: tuple[float | None, float | None] = (None, None),
 ) -> SlotPlan:
-    """Classify a DP decision into an action the controller can execute.
-
-    A slot without planned battery power is executed as HOLD (no discharge)
-    when the battery should not cover the load, and as SELF_CONSUME when it
-    should but the SoC grid is too coarse to plan it (load below one SoC step).
-    The decision compares what covering the load now is worth with what the
-    stored energy is worth later (slope of the DP cost-to-go).
-    """
+    """Classify an evaluated, continuous stored-energy change."""
     reason = ""
     # Battery/grid power as the ESS will execute it (differs from the DP flow
     # only when the battery covers a load smaller than one SoC step).
@@ -278,32 +301,19 @@ def _slot_plan(
             action = Action.SELF_CONSUME
             reason = "battery covers load"
     else:
-        value_less, value_more = marginal
-        can_discharge = soc_start - step >= battery.min_soc_kwh - EPS and value_less is not None
-        can_charge = soc_start + step <= battery.max_soc_kwh + EPS and value_more is not None
         if flow.grid_import > MIN_FLOW_KWH:
-            if not can_discharge:
-                # Do not let the ESS go below our minimum (its own may be lower).
-                action = Action.HOLD
-                reason = "battery at minimum SoC"
-            elif slot.import_price * battery.discharge_efficiency - battery.cycle_cost > value_less + EPS:  # type: ignore[operator]
-                action = Action.SELF_CONSUME
-                reason = "battery covers load"
-                battery_kwh = -flow.grid_import / battery.discharge_efficiency
-                grid_kwh = 0.0
-            else:
-                action = Action.HOLD
-                reason = "save battery for higher prices"
-        elif flow.grid_export > MIN_FLOW_KWH and can_charge:
-            if value_more * battery.charge_efficiency > slot.export_price + EPS:  # type: ignore[operator]
-                action = Action.SELF_CONSUME
-                reason = "store PV surplus"
-            else:
-                action = Action.HOLD
-                reason = "keep room for cheaper energy later"
+            action = Action.HOLD
+            reason = (
+                "battery at minimum SoC" if soc_start <= battery.min_soc_kwh + EPS else "save battery for higher prices"
+            )
+        elif flow.grid_export > MIN_FLOW_KWH:
+            action = Action.HOLD
+            reason = "keep room for cheaper energy later"
         else:
-            action = Action.SELF_CONSUME
+            action = Action.HOLD
             reason = "idle"
+    if flow.overload > EPS:
+        reason = f"unavoidable grid import exceeds limit by {flow.overload / slot.hours:.3f} kW; " + reason
     if flow.curtailed > 1e-3 and slot.export_price < 0:
         reason = f"curtail PV (export {slot.export_price * 100:.1f} ct/kWh); " + reason
 
@@ -325,4 +335,6 @@ def _slot_plan(
         cost=flow.money,
         wear_cost=flow.wear,
         reason=reason,
+        grid_violation_kw=flow.overload / hours,
+        export_price_known=slot.export_price_known,
     )

@@ -27,6 +27,7 @@ class SlotInput:
     export_price: float
     pv_kwh: float
     load_kwh: float
+    export_price_known: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +84,8 @@ class SlotPlan:
     cost: float  # EUR paid for grid energy in this slot (excl. wear and hurdles)
     wear_cost: float = 0.0  # EUR battery wear in this slot
     reason: str = ""
+    export_price_known: bool = True
+    grid_violation_kw: float = 0.0  # unavoidable import above configured limit
 
     def as_dict(self) -> dict[str, Any]:
         """Serialize to JSON-friendly dict."""
@@ -109,6 +112,16 @@ class Plan:
     soc_end_kwh: float = 0.0
 
     @property
+    def export_prices_complete(self) -> bool:
+        """Whether forecast money includes known export compensation."""
+        return all(slot.export_price_known for slot in self.slots)
+
+    @property
+    def feasible(self) -> bool:
+        """Whether all configured grid limits are satisfied."""
+        return all(slot.grid_violation_kw < 1e-6 for slot in self.slots)
+
+    @property
     def savings(self) -> float:
         """Savings vs. no battery, net of wear, correcting for change in stored energy.
 
@@ -122,6 +135,8 @@ class Plan:
         """Serialize to JSON-friendly dict."""
         return {
             "created": self.created.isoformat(),
+            "feasible": self.feasible,
+            "export_prices_complete": self.export_prices_complete,
             "total_cost": round(self.total_cost, 4),
             "baseline_cost": round(self.baseline_cost, 4),
             "wear_cost": round(self.wear_cost, 4),
