@@ -6,6 +6,14 @@ from datetime import UTC, datetime
 from typing import Any
 
 
+def to_float(value: Any) -> float | None:
+    """Float or None for missing / non-numeric values."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def parse_dt(value: Any) -> datetime | None:
     """Parse an ISO string or datetime to an aware datetime (naive -> UTC)."""
     if isinstance(value, datetime):

@@ -39,13 +39,17 @@ AC-coupled PV inverter when export prices go negative.
 | Step | What |
 |---|---|
 | Prices | Price sensor with forecast attributes, taxes, export model (netting end date, spot factor/fee, fixed). |
-| Solar | One or more forecast sensors (Solcast: select *today*, *tomorrow*, *day 3* sensors). |
+| Solar | One or more forecast sensors (Solcast: select *today*, *tomorrow*, *day 3* sensors). Forecasts of all selected sensors are **added up** (e.g. one per PV array), so don't select two sensors that cover the same array and period. |
 | Battery | SoC sensor, usable capacity, max charge/discharge power, efficiencies, battery power sensor. |
 | Consumption & grid | Household consumption sensor (without battery), grid power sensor (+ = import), grid limits. |
 | Victron ESS control | Grid setpoint, charge/inverter/feed-in limits, DESS mode select, PV limiter. Leave the setpoint empty for advisory-only use. |
 
 Everything can be changed later under *Configure*. Runtime tuning is done with entities:
 minimum/maximum SoC, battery wear cost (ct/kWh discharged) and arbitrage margin (ct/kWh).
+
+Reported costs (plan cost, planned vs actual cost) are what you pay for grid energy. Battery
+wear is reported separately (`wear_cost` in the plan summary) and subtracted from the savings.
+The arbitrage margin is only a hurdle for the optimizer: it is never part of a reported cost.
 
 ### How actions map to the ESS
 

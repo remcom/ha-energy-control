@@ -80,7 +80,8 @@ class SlotPlan:
     soc_end_pct: float
     import_price: float
     export_price: float
-    cost: float  # EUR for this slot (incl. wear)
+    cost: float  # EUR paid for grid energy in this slot (excl. wear and hurdles)
+    wear_cost: float = 0.0  # EUR battery wear in this slot
     reason: str = ""
 
     def as_dict(self) -> dict[str, Any]:
@@ -100,7 +101,8 @@ class Plan:
 
     created: datetime
     slots: list[SlotPlan] = field(default_factory=list)
-    total_cost: float = 0.0  # EUR over horizon, with battery
+    total_cost: float = 0.0  # EUR paid for grid energy over horizon, with battery
+    wear_cost: float = 0.0  # EUR battery wear over horizon (not in total_cost)
     baseline_cost: float = 0.0  # EUR over horizon, no battery, no curtailment
     terminal_value: float = 0.0  # EUR/kWh value given to energy left at horizon end
     soc_start_kwh: float = 0.0
@@ -108,9 +110,13 @@ class Plan:
 
     @property
     def savings(self) -> float:
-        """Savings vs. no battery, correcting for change in stored energy."""
+        """Savings vs. no battery, net of wear, correcting for change in stored energy.
+
+        The arbitrage hurdle only steers the optimizer; it is never paid and
+        therefore not part of any reported cost.
+        """
         stored_delta = (self.soc_end_kwh - self.soc_start_kwh) * self.terminal_value
-        return self.baseline_cost - self.total_cost + stored_delta
+        return self.baseline_cost - self.total_cost - self.wear_cost + stored_delta
 
     def as_dict(self) -> dict[str, Any]:
         """Serialize to JSON-friendly dict."""
@@ -118,6 +124,7 @@ class Plan:
             "created": self.created.isoformat(),
             "total_cost": round(self.total_cost, 4),
             "baseline_cost": round(self.baseline_cost, 4),
+            "wear_cost": round(self.wear_cost, 4),
             "savings": round(self.savings, 4),
             "terminal_value": round(self.terminal_value, 4),
             "soc_start_kwh": round(self.soc_start_kwh, 3),

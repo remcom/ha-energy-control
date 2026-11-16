@@ -11,9 +11,10 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.dispatcher import async_dispatcher_send
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.typing import ConfigType
 
-from .const import DOMAIN, FRONTEND_URL, SIGNAL_ENTRY_LOADED, VERSION
+from .const import DEFAULTS, DOMAIN, FRONTEND_URL, SIGNAL_ENTRY_LOADED, VERSION
 from .control.victron import VictronController
 from .coordinator import EnergyControlCoordinator
 from .data import EnergyControlConfigEntry, EnergyControlData
@@ -42,16 +43,22 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 async def async_setup_entry(hass: HomeAssistant, entry: EnergyControlConfigEntry) -> bool:
     """Set up from a config entry."""
     coordinator = EnergyControlCoordinator(hass, entry)
-    await coordinator.async_setup()
     history = History(hass, entry.entry_id)
-    await history.async_load()
     controller = VictronController(hass, coordinator, history)
-    entry.runtime_data = EnergyControlData(coordinator, controller, history)
+    await controller.async_load()
+    try:
+        await coordinator.async_setup()
+        await history.async_load()
+        entry.runtime_data = EnergyControlData(coordinator, controller, history)
 
-    # First plan; failures are tolerated (controller falls back to self consumption).
-    await coordinator.async_refresh()
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    await controller.async_start()
+        # First plan; failures are tolerated (controller falls back to self consumption).
+        await coordinator.async_refresh()
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+        await controller.async_start()
+    except Exception:
+        # Never leave the ESS in a forced state we no longer manage.
+        await controller.async_stop()
+        raise
     entry.async_on_unload(entry.add_update_listener(_async_reload))
     # Let open dashboard subscriptions re-attach after a reload.
     async_dispatcher_send(hass, SIGNAL_ENTRY_LOADED, entry.entry_id, entry.runtime_data)
@@ -59,10 +66,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: EnergyControlConfigEntry
 
 
 async def _async_reload(hass: HomeAssistant, entry: EnergyControlConfigEntry) -> None:
+    # Options changed: hand control over to the reloaded entry instead of a
+    # restore + re-takeover (see VictronController.reload_config).
+    entry.runtime_data.controller.reload_config = {**DEFAULTS, **(entry.options or entry.data)}
     await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: EnergyControlConfigEntry) -> bool:
     """Unload: hand control back to the ESS first."""
-    await entry.runtime_data.controller.async_stop()
-    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    controller = entry.runtime_data.controller
+    await controller.async_stop()
+    unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if not unloaded and controller.reload_config is not None:
+        # The reload stops here: nobody would own the hardware.
+        controller.reload_config = None
+        await controller.async_release()
+    return unloaded
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: EnergyControlConfigEntry) -> None:
+    """Delete the entry's stores (control was already released on unload)."""
+    for suffix in ("settings", "history", "originals"):
+        await Store(hass, 1, f"{DOMAIN}.{entry.entry_id}.{suffix}").async_remove()

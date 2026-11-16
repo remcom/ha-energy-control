@@ -8,11 +8,12 @@ from typing import Any
 import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.config_entries import ConfigEntryState
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.util import dt as dt_util
 
-from .const import CONF_CAPACITY_KWH, DOMAIN, SET_MAX_SOC, SET_MIN_SOC, SIGNAL_ENTRY_LOADED
+from .const import CONF_CAPACITY_KWH, CONF_SOC_ENTITY, DOMAIN, SET_MAX_SOC, SET_MIN_SOC, SIGNAL_ENTRY_LOADED
 from .data import EnergyControlData
 
 
@@ -116,6 +117,10 @@ def ws_subscribe(hass: HomeAssistant, connection: websocket_api.ActiveConnection
             connection.send_message(websocket_api.event_message(msg["id"], payload))
 
     @callback
+    def on_soc_changed(_event: Event[EventStateChangedData]) -> None:
+        push()
+
+    @callback
     def detach() -> None:
         for unsub in state["unsubs"]:
             unsub()
@@ -126,6 +131,9 @@ def ws_subscribe(hass: HomeAssistant, connection: websocket_api.ActiveConnection
         detach()
         state["data"] = new
         state["unsubs"] = [new.coordinator.async_add_listener(push), new.controller.async_add_listener(push)]
+        # The controller only notifies on changes: follow the live SoC directly.
+        if soc_entity := new.coordinator.config.get(CONF_SOC_ENTITY):
+            state["unsubs"].append(async_track_state_change_event(hass, [soc_entity], on_soc_changed))
 
     @callback
     def on_entry_loaded(loaded_id: str, new: EnergyControlData) -> None:

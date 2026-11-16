@@ -187,6 +187,7 @@ class PlanSensor(EnergyControlEntity, SensorEntity):
                 "horizon_end": plan.slots[-1].start.isoformat() if plan.slots else None,
                 "cost": round(plan.total_cost, 3),
                 "baseline_cost": round(plan.baseline_cost, 3),
+                "wear_cost": round(plan.wear_cost, 3),
                 "savings": round(plan.savings, 3),
             },
             "forecast": [

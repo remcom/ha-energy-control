@@ -63,6 +63,7 @@ DESS_OFF_OPTIONS = ("off", "disabled", "0")
 WRITE_TOLERANCE_W = 5.0
 PV_LIMIT_HYSTERESIS_W = 40.0
 REPLAN_SOC_DEVIATION = 5.0  # % points
+REPLAN_MIN_INTERVAL_S = 60  # minimum plan age before a drift-triggered replan
 STORE_CURTAILING = "_curtailing"  # extra key in the originals store
 
 # Actuators that must report a value before we take over, so their original
@@ -73,6 +74,15 @@ TAKEOVER_KEYS = (
     CONF_CHARGE_LIMIT_ENTITY,
     CONF_DISCHARGE_LIMIT_ENTITY,
     CONF_FEED_IN_LIMIT_ENTITY,
+)
+# Everything the saved originals depend on: if any of these change, a reload
+# must restore the originals with the old configuration first.
+HARDWARE_KEYS = (
+    *TAKEOVER_KEYS,
+    CONF_DESS_MODE_ENTITY,
+    CONF_PV_LIMIT_ENTITY,
+    CONF_PV_LIMIT_UNIT,
+    CONF_PV_LIMIT_MAX_W,
 )
 
 
@@ -98,7 +108,13 @@ class VictronController:
         self.status = "idle"
         self.last_error: str | None = None
         self._listeners: list[Callable[[], None]] = []
+        self._notified: tuple[Any, ...] | None = None
         self._lock = asyncio.Lock()
+        # New configuration of a pending options reload. Control is handed over
+        # to the next controller instead of restore + immediate re-takeover,
+        # which could save our own forced values as "originals" when the
+        # actuator states lag behind the writes.
+        self.reload_config: dict[str, Any] | None = None
 
     # --- lifecycle ---------------------------------------------------------
     @property
@@ -106,15 +122,18 @@ class VictronController:
         """True when at least the grid setpoint entity is configured."""
         return bool(self.config.get(CONF_SETPOINT_ENTITY))
 
-    async def async_start(self) -> None:
-        """Start the control loop."""
+    async def async_load(self) -> None:
+        """Load saved originals: present after a crash or a control-keeping reload."""
         stored = await self._store.async_load()
         if stored is not None:
-            # Crashed while in control: we still own the hardware.
+            # We still own the hardware.
             stored = dict(stored)
             self.curtailing = bool(stored.pop(STORE_CURTAILING, False))
             self._originals = stored
             self.active = True
+
+    async def async_start(self) -> None:
+        """Start the control loop (call async_load first)."""
         self._unsubs.append(async_track_time_interval(self.hass, self._tick, timedelta(seconds=CONTROL_INTERVAL_S)))
         self._unsubs.append(self.coordinator.async_add_listener(self._on_update))
         self._unsub_stop = self.hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, self._on_stop)
@@ -129,10 +148,57 @@ class VictronController:
             self._unsub_stop = None
 
     async def async_stop(self) -> None:
-        """Stop and hand control back."""
+        """Stop and hand control back (or over, on an options reload)."""
         self._stopping = True
         self._cancel_listeners()
+        if self.reload_config is not None:
+            async with self._lock:
+                await self._async_hand_over(self.reload_config)
+            return
         await self.async_release()
+
+    async def _async_hand_over(self, new_config: dict[str, Any]) -> None:
+        """Keep control across a reload; restore only what `new_config` drives differently.
+
+        The remaining originals stay in the store for the next controller, which
+        captures newly configured actuators before writing to them.
+        """
+        if not self.active or self._originals is None:
+            return
+        originals = self._originals
+        changed = {key for key in HARDWARE_KEYS if self.config.get(key) != new_config.get(key)}
+        errors: list[str] = []
+        for key in TAKEOVER_KEYS:
+            if key in changed and key in originals:
+                try:
+                    await self._write_number(key, float(originals[key]))
+                except HomeAssistantError as err:
+                    errors.append(f"{self.config.get(key)}={originals[key]}: {err}")
+                originals.pop(key)
+        pv_keys = {CONF_PV_LIMIT_ENTITY, CONF_PV_LIMIT_UNIT, CONF_PV_LIMIT_MAX_W}
+        if changed & pv_keys and self.config.get(CONF_PV_LIMIT_ENTITY):
+            if CONF_PV_LIMIT_ENTITY in originals or self.curtailing:
+                pv_original = originals.get(CONF_PV_LIMIT_ENTITY, self.config[CONF_PV_LIMIT_MAX_W])
+                try:
+                    await self._write_pv_limit(float(pv_original), force=True)
+                except HomeAssistantError as err:
+                    errors.append(f"{self.config[CONF_PV_LIMIT_ENTITY]}={pv_original}: {err}")
+            originals.pop(CONF_PV_LIMIT_ENTITY, None)
+            self.curtailing = False
+        dess = self.config.get(CONF_DESS_MODE_ENTITY)
+        if CONF_DESS_MODE_ENTITY in changed and CONF_DESS_MODE_ENTITY in originals:
+            if dess:
+                try:
+                    await self._select(dess, originals[CONF_DESS_MODE_ENTITY])
+                except HomeAssistantError as err:
+                    errors.append(f"{dess}={originals[CONF_DESS_MODE_ENTITY]}: {err}")
+            originals.pop(CONF_DESS_MODE_ENTITY)
+        if errors:
+            # These actuators are no longer configured: nobody can retry. Say
+            # exactly what to restore by hand.
+            _LOGGER.error("Energy Control could not restore replaced actuators: %s", "; ".join(errors))
+        await self._async_save_store()
+        _LOGGER.debug("Energy Control hands ESS control over to the reloaded entry")
 
     async def _on_stop(self, _event: Event) -> None:
         # Best effort: never leave the ESS in a forced charge/discharge state.
@@ -149,6 +215,19 @@ class VictronController:
         return lambda: self._listeners.remove(update)
 
     def _notify(self) -> None:
+        # The control loop runs every few seconds: only wake entities and
+        # dashboard subscriptions when something they show actually changed.
+        snapshot = (
+            self.status,
+            self.active,
+            self.curtailing,
+            self.desired,
+            self.last_error,
+            self.coordinator.override,
+        )
+        if snapshot == self._notified:
+            return
+        self._notified = snapshot
         for update in list(self._listeners):
             update()
 
@@ -175,8 +254,16 @@ class VictronController:
             soc_pct=soc,
             curtailing=self.curtailing,
         )
-        # Replan when reality drifts away from the plan.
-        if planned is not None and soc is not None:
+        # Replan when reality drifts away from the plan. Not while planning
+        # fails (the old plan is kept and would trigger a retry every tick) and
+        # not right after a replan.
+        if (
+            planned is not None
+            and soc is not None
+            and self.coordinator.last_update_success
+            and plan is not None
+            and now - plan.created > timedelta(seconds=REPLAN_MIN_INTERVAL_S)
+        ):
             frac = (now - planned.start).total_seconds() / (planned.hours * 3600 or 1)
             expected = planned.soc_start_pct + (planned.soc_end_pct - planned.soc_start_pct) * frac
             if abs(soc - expected) > REPLAN_SOC_DEVIATION:
@@ -293,10 +380,17 @@ class VictronController:
                 originals=self._originals_obj(),
                 limits=limits,
             )
-            await self._write_number(CONF_SETPOINT_ENTITY, desired.setpoint)
-            await self._write_number(CONF_CHARGE_LIMIT_ENTITY, desired.charge_limit)
-            await self._write_number(CONF_DISCHARGE_LIMIT_ENTITY, desired.discharge_limit)
-            await self._write_number(CONF_FEED_IN_LIMIT_ENTITY, desired.feed_in_limit)
+            originals = self._originals or {}
+            for key, value in (
+                (CONF_SETPOINT_ENTITY, desired.setpoint),
+                (CONF_CHARGE_LIMIT_ENTITY, desired.charge_limit),
+                (CONF_DISCHARGE_LIMIT_ENTITY, desired.discharge_limit),
+                (CONF_FEED_IN_LIMIT_ENTITY, desired.feed_in_limit),
+            ):
+                # Never write an actuator whose original is not saved yet
+                # (offline since a reload added it): it could not be restored.
+                if key in originals:
+                    await self._write_number(key, value)
             await self._apply_pv_limit(desired, slot)
             self.desired = desired
             self.status = status
@@ -344,15 +438,7 @@ class VictronController:
     async def _async_take_over(self) -> bool:
         """Save the original settings and take control. False while not possible yet."""
         if self.active and self._originals is not None:
-            # Late capture of the PV limiter original (inverter was offline).
-            if (
-                self.config.get(CONF_PV_LIMIT_ENTITY)
-                and CONF_PV_LIMIT_ENTITY not in self._originals
-                and not self.curtailing
-                and (pv_original := self._pv_limit_original()) is not None
-            ):
-                self._originals[CONF_PV_LIMIT_ENTITY] = pv_original
-                await self._async_save_store()
+            await self._async_capture_late()
             return True
         if missing := self._missing_entities():
             if not self._waiting_logged:
@@ -380,6 +466,47 @@ class VictronController:
         except HomeAssistantError as err:
             _LOGGER.warning("Energy Control could not switch DESS off: %s", err)
         return True
+
+    async def _async_capture_late(self) -> None:
+        """Save originals of actuators that were offline or newly configured."""
+        originals = self._originals
+        assert originals is not None
+        captured: dict[str, Any] = {}
+        for key in TAKEOVER_KEYS:
+            if (
+                self.config.get(key)
+                and key not in originals
+                and (value := state_float(self.hass, self.config.get(key))) is not None
+            ):
+                captured[key] = value
+        # Not while curtailing: the limiter then holds our value, not the original.
+        if (
+            self.config.get(CONF_PV_LIMIT_ENTITY)
+            and CONF_PV_LIMIT_ENTITY not in originals
+            and not self.curtailing
+            and (pv_original := self._pv_limit_original()) is not None
+        ):
+            captured[CONF_PV_LIMIT_ENTITY] = pv_original
+        dess = self.config.get(CONF_DESS_MODE_ENTITY)
+        new_dess = False
+        if (
+            dess
+            and CONF_DESS_MODE_ENTITY not in originals
+            and (state := self.hass.states.get(dess)) is not None
+            and state.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN)
+        ):
+            captured[CONF_DESS_MODE_ENTITY] = state.state
+            new_dess = True
+        if not captured:
+            return
+        originals.update(captured)
+        await self._async_save_store()
+        _LOGGER.info("Energy Control saved originals of %s", ", ".join(captured))
+        if new_dess:
+            try:
+                await self._set_dess_off()
+            except HomeAssistantError as err:
+                _LOGGER.warning("Energy Control could not switch DESS off: %s", err)
 
     async def async_release(self) -> None:
         """Restore the original actuator values."""
@@ -468,7 +595,8 @@ class VictronController:
 
     async def _apply_pv_limit(self, desired: Desired, slot: SlotPlan | None) -> None:
         if not self.config.get(CONF_PV_LIMIT_ENTITY):
-            self.curtailing = desired.curtail
+            # Without a PV limiter only the feed-in limit can curtail.
+            self.curtailing = desired.curtail and bool(self.config.get(CONF_FEED_IN_LIMIT_ENTITY))
             return
         max_w = float(self.config[CONF_PV_LIMIT_MAX_W])
         if desired.curtail:

@@ -287,7 +287,9 @@ class EnergyControlOptionsFlow(OptionsFlow):
     def values(self) -> dict[str, Any]:
         """Current merged configuration being edited."""
         if self._values is None:
-            self._values = {**self.config_entry.data, **self.config_entry.options}
+            # Options hold the complete configuration once saved: merging with
+            # data would resurrect fields cleared in an earlier options edit.
+            self._values = dict(self.config_entry.options or self.config_entry.data)
         return self._values
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:

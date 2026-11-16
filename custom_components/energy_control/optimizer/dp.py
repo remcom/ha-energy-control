@@ -33,7 +33,9 @@ INF = math.inf
 class _Flow:
     """Energy flows (kWh) of one slot for one SoC delta."""
 
-    cost: float
+    cost: float  # optimizer objective: money + wear + arbitrage hurdle
+    money: float  # EUR actually paid for grid energy (import - export)
+    wear: float  # EUR battery wear
     grid_import: float
     grid_export: float
     pv_used: float
@@ -89,15 +91,14 @@ def slot_flow(
         if not strategy.battery_to_grid and battery_exported > EPS:
             continue
 
-        cost = (
-            grid_import * slot.import_price
-            - grid_export * slot.export_price
-            + max(-delta_kwh, 0.0) * battery.cycle_cost
-            + (grid_charged + battery_exported) * strategy.arbitrage_margin
-        )
+        money = grid_import * slot.import_price - grid_export * slot.export_price
+        wear = max(-delta_kwh, 0.0) * battery.cycle_cost
+        cost = money + wear + (grid_charged + battery_exported) * strategy.arbitrage_margin
         if best is None or cost < best.cost - EPS:
             best = _Flow(
                 cost,
+                money,
+                wear,
                 grid_import,
                 grid_export,
                 pv_used,
@@ -208,15 +209,18 @@ def optimize(
     # Forward pass: reconstruct the path.
     i = i0
     total_cost = 0.0
+    wear_cost = 0.0
     for t, slot in enumerate(slots):
         d = choice[t][i]
         flow = flows[t][d]
         soc_start = soc_of[i]
         i += d
         soc_end = soc_of[i]
-        total_cost += flow.cost
+        total_cost += flow.money
+        wear_cost += flow.wear
         plan.slots.append(_slot_plan(slot, d * step, flow, soc_start, soc_end, step, battery))
     plan.total_cost = total_cost
+    plan.wear_cost = wear_cost
     plan.baseline_cost = baseline_cost(slots)
     plan.soc_end_kwh = soc_of[i]
     return plan
@@ -277,6 +281,7 @@ def _slot_plan(
         soc_end_pct=100.0 * soc_end / capacity,
         import_price=slot.import_price,
         export_price=slot.export_price,
-        cost=flow.cost,
+        cost=flow.money,
+        wear_cost=flow.wear,
         reason=reason,
     )

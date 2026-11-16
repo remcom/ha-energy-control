@@ -10,12 +10,12 @@ Supported attribute layouts (auto-detected):
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
 from enum import StrEnum
 from typing import Any
 
-from .util import parse_dt
+from .util import parse_dt, to_float
 
 TIME_KEYS = ("start", "startsAt", "starts_at", "from", "time", "period_start", "start_time", "datetime")
 VALUE_KEYS = ("price", "value", "total", "price_total", "electricity_price")
@@ -102,13 +102,6 @@ def unit_scale(unit: str | None) -> float:
     return scale
 
 
-def _num(value: Any) -> float | None:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
 def _parse_quarters(block: Mapping[str, Any], scale: float) -> list[PricePoint]:
     start = parse_dt(block.get("start"))
     prices = block.get("prices") or []
@@ -118,10 +111,10 @@ def _parse_quarters(block: Mapping[str, Any], scale: float) -> list[PricePoint]:
     spots = block.get("energy") or []
     points: list[PricePoint] = []
     for i, raw in enumerate(prices):
-        value = _num(raw)
+        value = to_float(raw)
         if value is None:
             continue
-        spot = _num(spots[i]) if i < len(spots) else None
+        spot = to_float(spots[i]) if i < len(spots) else None
         points.append(
             PricePoint(
                 start=start + timedelta(minutes=minutes * i),
@@ -139,10 +132,10 @@ def _parse_list(items: Iterable[Any], scale: float) -> list[PricePoint]:
         if not isinstance(item, Mapping):
             continue
         start = next((parse_dt(item[k]) for k in TIME_KEYS if k in item), None)
-        value = next((_num(item[k]) for k in VALUE_KEYS if k in item), None)
+        value = next((to_float(item[k]) for k in VALUE_KEYS if k in item), None)
         if start is None or value is None:
             continue
-        spot = next((_num(item[k]) for k in SPOT_KEYS if k in item), None)
+        spot = next((to_float(item[k]) for k in SPOT_KEYS if k in item), None)
         end = parse_dt(item.get("end") or item.get("endsAt") or item.get("till"))
         raw.append((start, value, spot, end))
     raw.sort(key=lambda r: r[0])
@@ -180,7 +173,17 @@ def parse_price_attributes(attributes: Mapping[str, Any], unit: str | None = Non
     unique: dict[datetime, PricePoint] = {}
     for point in points:
         unique[point.start] = point
-    return [unique[k] for k in sorted(unique)]
+    # Sources can publish several resolutions (e.g. hourly and quarter-hour
+    # lists). Shorten an interval that runs into the next one so intervals
+    # never overlap: price_at relies on that.
+    result: list[PricePoint] = []
+    for start in sorted(unique):
+        point = unique[start]
+        if result and result[-1].end > start:
+            prev = result[-1]
+            result[-1] = replace(prev, minutes=int((start - prev.start).total_seconds() // 60))
+        result.append(point)
+    return result
 
 
 def price_at(points: list[PricePoint], when: datetime) -> PricePoint | None:

@@ -167,3 +167,16 @@ def test_performance(n_slots):
     )
     assert len(plan.slots) == n_slots
     assert time.perf_counter() - start < 3.0
+
+
+def test_reported_cost_excludes_arbitrage_hurdle():
+    """The arbitrage margin steers the optimizer but is never reported as cost."""
+    prices = [0.10] * 16 + [0.60] * 16
+    slots = make_slots(prices, load=0.05)
+    plan = optimize(slots, battery(20), GridParams(), Strategy(battery_to_grid=True, arbitrage_margin=0.05), now=T0)
+    grid_money = sum((s.grid_kw * s.hours) * (s.import_price if s.grid_kw > 0 else s.export_price) for s in plan.slots)
+    assert plan.total_cost == pytest.approx(grid_money, abs=1e-6)
+    assert plan.total_cost == pytest.approx(sum(s.cost for s in plan.slots))
+    assert plan.wear_cost == pytest.approx(sum(s.wear_cost for s in plan.slots))
+    discharged = sum(-s.battery_kw * s.hours for s in plan.slots if s.battery_kw < 0)
+    assert plan.wear_cost == pytest.approx(discharged * 0.02)

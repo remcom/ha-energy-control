@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
-from .util import parse_dt
+from .util import parse_dt, to_float
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,10 +51,10 @@ def parse_solcast(attributes: Mapping[str, Any], estimate: str = "pv_estimate") 
         if not isinstance(row, Mapping):
             continue
         start = parse_dt(row.get("period_start"))
-        kw = row.get(estimate, row.get("pv_estimate"))
+        kw = to_float(row.get(estimate, row.get("pv_estimate")))
         if start is None or kw is None:
             continue
-        parsed.append((start, float(kw)))
+        parsed.append((start, kw))
     parsed.sort(key=lambda r: r[0])
     minutes = _infer_minutes([p[0] for p in parsed], 30)
     return [EnergyInterval(s, m, kw * m / 60) for (s, kw), m in zip(parsed, minutes, strict=True)]
@@ -66,7 +66,9 @@ def parse_wh_period(attributes: Mapping[str, Any]) -> list[EnergyInterval]:
     if not isinstance(periods, Mapping):
         return []
     parsed = sorted(
-        (dt, float(wh)) for key, wh in periods.items() if (dt := parse_dt(key)) is not None and wh is not None
+        (dt, wh)
+        for key, raw in periods.items()
+        if (dt := parse_dt(key)) is not None and (wh := to_float(raw)) is not None
     )
     minutes = _infer_minutes([p[0] for p in parsed], 60)
     return [EnergyInterval(s, m, wh / 1000) for (s, wh), m in zip(parsed, minutes, strict=True)]
@@ -82,10 +84,10 @@ def parse_generic(attributes: Mapping[str, Any]) -> list[EnergyInterval]:
         if not isinstance(row, Mapping):
             continue
         start = next((parse_dt(row[k]) for k in ("period_start", "datetime", "start") if k in row), None)
-        value = next((row[k] for k in ("energy", "value", "kwh") if k in row), None)
+        value = next((to_float(row[k]) for k in ("energy", "value", "kwh") if k in row), None)
         if start is None or value is None:
             continue
-        parsed.append((start, float(value)))
+        parsed.append((start, value))
     parsed.sort(key=lambda r: r[0])
     minutes = _infer_minutes([p[0] for p in parsed], 60)
     return [EnergyInterval(s, m, v) for (s, v), m in zip(parsed, minutes, strict=True)]

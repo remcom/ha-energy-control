@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import json
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -123,3 +124,33 @@ def test_build_slots_partial_first_slot():
     assert slots[1].start == datetime(2026, 11, 14, 16, 15, tzinfo=AMS)
     assert len(slots) == 10
     assert slots[-1].start.astimezone(UTC) == datetime(2026, 11, 14, 17, 15, tzinfo=UTC)
+
+
+def test_mixed_resolution_prices_do_not_overlap():
+    """An hourly list next to quarter prices is shortened so intervals never overlap."""
+    attrs = {
+        "unit_of_measurement": "EUR/kWh",
+        "prices": [
+            {"start": "2026-11-15T10:15:00+00:00", "end": "2026-11-15T10:30:00+00:00", "price": 0.30},
+            {"start": "2026-11-15T10:30:00+00:00", "end": "2026-11-15T10:45:00+00:00", "price": 0.40},
+        ],
+        "raw_today": [{"start": "2026-11-15T10:00:00+00:00", "end": "2026-11-15T11:00:00+00:00", "value": 0.20}],
+    }
+    points = parse_price_attributes(attrs)
+    for prev, nxt in itertools.pairwise(points):
+        assert prev.end <= nxt.start
+    assert points[0].minutes == 15
+    assert price_at(points, datetime(2026, 11, 15, 10, 20, tzinfo=UTC)).price == 0.30
+
+
+def test_pv_parsers_skip_non_numeric_values():
+    """A broken forecast value is skipped instead of failing the whole plan."""
+    solcast = {
+        "detailedForecast": [
+            {"period_start": "2026-11-15T10:00:00+00:00", "pv_estimate": "unavailable"},
+            {"period_start": "2026-11-15T10:30:00+00:00", "pv_estimate": 1.0},
+        ]
+    }
+    assert [i.kwh for i in parse_pv_attributes(solcast)] == [0.5]
+    wh = {"wh_period": {"2026-11-15T10:00:00+00:00": "n/a", "2026-11-15T11:00:00+00:00": 500}}
+    assert [i.kwh for i in parse_pv_attributes(wh)] == [0.5]

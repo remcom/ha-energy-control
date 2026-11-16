@@ -348,3 +348,104 @@ async def test_suggestions_use_l1_on_single_phase(hass: HomeAssistant) -> None:
     """On a single-phase system the L1 sensor is the whole system."""
     _victron(hass, "sensor", "gx_consumption_power_l1")
     assert victron_suggestions(hass)[CONF_LOAD_ENTITY] == "sensor.gx_consumption_power_l1"
+
+
+# --- reload ------------------------------------------------------------------------
+async def test_options_reload_keeps_control(hass: HomeAssistant, entry, setup) -> None:
+    """Saving options that leave the hardware alone does not restore + retake the ESS."""
+    number_calls, select_calls = setup
+    await _auto(hass, entry)
+    accept(hass, number_calls)
+    _set(hass, DESS, "off")
+    originals = dict(entry.runtime_data.controller._originals)
+    number_calls.clear()
+    select_calls.clear()
+
+    hass.config_entries.async_update_entry(entry, options={**entry.data, "pv_scale": 0.9})
+    await hass.async_block_till_done()
+
+    controller = entry.runtime_data.controller
+    assert controller.active
+    assert controller._originals == originals  # not re-captured from the forced values
+    assert not select_calls  # DESS not switched back on
+    assert SETPOINT not in written(number_calls) or written(number_calls)[SETPOINT] != 0
+
+
+async def test_options_reload_with_new_hardware_hands_over(hass: HomeAssistant, entry, setup) -> None:
+    """A replaced actuator gets its original back; the others stay under control."""
+    number_calls, select_calls = setup
+    await _auto(hass, entry)
+    accept(hass, number_calls)
+    _set(hass, DESS, "off")
+    _set(hass, PV_LIMIT, "1200")  # e.g. curtailed earlier
+    number_calls.clear()
+    select_calls.clear()
+    new_limiter = "number.other_pv_limit"
+    hass.states.async_set(new_limiter, "2000", {"min": 0, "max": 10000})
+
+    hass.config_entries.async_update_entry(entry, options={**entry.data, CONF_PV_LIMIT_ENTITY: new_limiter})
+    await hass.async_block_till_done()
+
+    controller = entry.runtime_data.controller
+    assert controller.active
+    assert written(number_calls)[PV_LIMIT] == 2700  # old limiter restored
+    assert DISCHARGE not in written(number_calls)  # not restored: still controlled
+    assert not select_calls  # DESS stays off
+    assert controller._originals[CONF_PV_LIMIT_ENTITY] == 2000  # new limiter captured
+    assert controller._originals["discharge_limit_entity"] == 2750  # kept, not re-captured
+
+
+async def test_new_actuator_not_written_before_capture(hass: HomeAssistant, entry, setup) -> None:
+    """An actuator added by a reload while offline is only written once its original is saved."""
+    number_calls, _ = setup
+    await _auto(hass, entry)
+    accept(hass, number_calls)
+    number_calls.clear()
+    new_charge = "number.other_charge_limit"
+    hass.states.async_set(new_charge, STATE_UNAVAILABLE, {"min": -1, "max": 10000})
+
+    hass.config_entries.async_update_entry(entry, options={**entry.data, "charge_limit_entity": new_charge})
+    await hass.async_block_till_done()
+    controller = entry.runtime_data.controller
+    assert new_charge not in written(number_calls)
+    assert "charge_limit_entity" not in controller._originals
+
+    _set(hass, new_charge, "-1")
+    await controller.async_apply()
+    assert controller._originals["charge_limit_entity"] == -1
+    assert new_charge in written(number_calls)
+
+
+async def test_remove_entry_deletes_stores(hass: HomeAssistant, entry, setup, hass_storage) -> None:
+    """Removing the entry leaves no settings or history behind."""
+    await entry.runtime_data.coordinator.async_set_setting("min_soc", 20.0)
+    await hass.async_block_till_done()
+    assert f"{DOMAIN}.{entry.entry_id}.settings" in hass_storage
+    await hass.config_entries.async_remove(entry.entry_id)
+    await hass.async_block_till_done()
+    assert not [k for k in hass_storage if k.startswith(f"{DOMAIN}.{entry.entry_id}.")]
+
+
+# --- drift replan ------------------------------------------------------------------
+async def test_no_drift_replan_while_planning_fails(hass: HomeAssistant, entry, setup, freezer) -> None:
+    """A failing coordinator keeps its old plan; SoC drift must not retry every tick."""
+    controller = entry.runtime_data.controller
+    coordinator = entry.runtime_data.coordinator
+    requests = []
+
+    async def fake_refresh() -> None:
+        requests.append(1)
+
+    coordinator.async_request_refresh = fake_refresh
+    freezer.tick(timedelta(minutes=2))
+    _set(hass, "sensor.soc", "80")  # far from the planned ~30 %
+
+    coordinator.last_update_success = False
+    controller._record(dt_util.utcnow())
+    await hass.async_block_till_done()
+    assert not requests
+
+    coordinator.last_update_success = True
+    controller._record(dt_util.utcnow())
+    await hass.async_block_till_done()
+    assert requests
