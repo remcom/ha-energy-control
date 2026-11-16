@@ -259,6 +259,10 @@ def _slot_plan(
     stored energy is worth later (slope of the DP cost-to-go).
     """
     reason = ""
+    # Battery/grid power as the ESS will execute it (differs from the DP flow
+    # only when the battery covers a load smaller than one SoC step).
+    battery_kwh = delta
+    grid_kwh = flow.grid_import - flow.grid_export
     if delta > EPS:
         if flow.grid_charged > 1e-3:
             action = Action.CHARGE_GRID
@@ -285,6 +289,8 @@ def _slot_plan(
             elif slot.import_price * battery.discharge_efficiency - battery.cycle_cost > value_less + EPS:  # type: ignore[operator]
                 action = Action.SELF_CONSUME
                 reason = "battery covers load"
+                battery_kwh = -flow.grid_import / battery.discharge_efficiency
+                grid_kwh = 0.0
             else:
                 action = Action.HOLD
                 reason = "save battery for higher prices"
@@ -307,8 +313,8 @@ def _slot_plan(
         start=slot.start,
         hours=slot.hours,
         action=action,
-        battery_kw=delta / hours,
-        grid_kw=(flow.grid_import - flow.grid_export) / hours,
+        battery_kw=battery_kwh / hours,
+        grid_kw=grid_kwh / hours,
         pv_kw=slot.pv_kwh / hours,
         load_kw=slot.load_kwh / hours,
         curtail_kw=flow.curtailed / hours,

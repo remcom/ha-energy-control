@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from pathlib import Path
 
@@ -14,7 +15,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.typing import ConfigType
 
-from .const import DEFAULTS, DOMAIN, FRONTEND_URL, SIGNAL_ENTRY_LOADED, VERSION
+from .const import DEFAULTS, DOMAIN, FRONTEND_URL, SIGNAL_ENTRY_LOADED
 from .control.victron import VictronController
 from .coordinator import EnergyControlCoordinator
 from .data import EnergyControlConfigEntry, EnergyControlData
@@ -34,10 +35,16 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         card = Path(__file__).parent / "frontend" / "energy-control-card.js"
         await hass.http.async_register_static_paths([StaticPathConfig(FRONTEND_URL, str(card), True)])
         if "frontend" in hass.config.components:
-            add_extra_js_url(hass, f"{FRONTEND_URL}?v={VERSION}")
+            # Cache-bust on content: a changed card reaches browsers without a version bump.
+            digest = await hass.async_add_executor_job(_file_digest, card)
+            add_extra_js_url(hass, f"{FRONTEND_URL}?v={digest}")
     async_setup_websocket(hass)
     async_setup_services(hass)
     return True
+
+
+def _file_digest(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()[:12]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: EnergyControlConfigEntry) -> bool:

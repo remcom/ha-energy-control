@@ -2,31 +2,38 @@
  * Energy Control card — plan timeline, planned vs actual, summary.
  * Dependency-free web component; data via websocket `energy_control/subscribe`.
  */
-const CARD_VERSION = "0.1.0";
+const CARD_VERSION = "0.2.0";
 
-const ACTION_COLORS = {
-  self_consume: "var(--ec-self, #8a94a6)",
-  hold: "var(--ec-hold, #6c8ebf)",
-  charge_grid: "var(--ec-charge, #2e9e5b)",
-  discharge_grid: "var(--ec-discharge, #e8833a)",
+// What the battery does in a slot: the plan action, with self consumption
+// split by direction so "battery covers the house" is visible at a glance.
+const KINDS = {
+  cover: { color: "var(--ec-cover, #f0a94b)", label: "Battery → house" },
+  store: { color: "var(--ec-store, #9ccc65)", label: "PV → battery" },
+  idle: { color: "var(--ec-idle, #9aa3b2)", label: "Idle" },
+  hold: { color: "var(--ec-hold, #5b8fd6)", label: "Hold (grid → house)" },
+  charge_grid: { color: "var(--ec-charge, #2e9e5b)", label: "Charge from grid" },
+  discharge_grid: { color: "var(--ec-discharge, #e0662f)", label: "Discharge to grid" },
 };
-const ACTION_LABELS = {
-  self_consume: "Self consumption",
-  hold: "Hold",
-  charge_grid: "Charge from grid",
-  discharge_grid: "Discharge to grid",
+const kindOf = (action, batteryKw) => {
+  if (action !== "self_consume") return KINDS[action] ? action : "idle";
+  if (batteryKw == null || Math.abs(batteryKw) < 1e-3) return "idle";
+  return batteryKw < 0 ? "cover" : "store";
 };
 const C = {
   pv: "var(--ec-pv, #e0a800)",
-  load: "var(--ec-load, #5b7fb3)",
+  load: "var(--ec-load, #4f6d9a)",
   grid: "var(--ec-grid, #8e6cbf)",
   soc: "var(--ec-soc, #3b82f6)",
   actual: "var(--ec-actual, #d6455d)",
   price: "var(--ec-price, #9aa0a6)",
   neg: "var(--ec-neg, #d6455d)",
-  charge: ACTION_COLORS.charge_grid,
-  discharge: ACTION_COLORS.discharge_grid,
+  charge: KINDS.charge_grid.color,
+  discharge: KINDS.discharge_grid.color,
 };
+
+const AXIS_W = 48; // fixed y-axis column (stays visible while scrolling)
+const RANGES = [12, 24, 36, 48];
+const ZOOMS = [0, 24, 48, 96]; // px per hour; 0 = fit to card
 
 const fmtTime = (d) => d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 const fmtDay = (d) => d.toLocaleDateString([], { weekday: "short" });
@@ -34,6 +41,8 @@ const ct = (eur) => (eur == null ? "–" : `${(eur * 100).toFixed(1)} ct`);
 const eur = (v) => (v == null ? "–" : `€ ${v.toFixed(2)}`);
 const kw = (v) => (v == null ? "–" : `${v.toFixed(2)} kW`);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+const legendHtml = (items) =>
+  items.map(([c, l, style]) => `<span><i class="${style ?? ""}" style="--c:${c}"></i>${l}</span>`).join("");
 
 function niceRange(min, max, pad = 0.08) {
   if (!isFinite(min) || !isFinite(max)) return [0, 1];
@@ -49,7 +58,7 @@ class EnergyControlCard extends HTMLElement {
     this._tab = "plan";
     this._data = null;
     this._width = 600;
-    this._hover = null;
+    this._scroll = {};
   }
 
   static getStubConfig() {
@@ -57,8 +66,10 @@ class EnergyControlCard extends HTMLElement {
   }
 
   setConfig(config) {
-    this._config = { hours: 36, history_hours: 24, ...config };
+    this._config = { hours: 36, history_hours: 24, hour_width: 0, ...config };
     if (this._config.tab) this._tab = this._config.tab;
+    this._hours = Number(this._config.hours);
+    this._hourWidth = Number(this._config.hour_width) || 0;
     this._render();
   }
 
@@ -69,11 +80,11 @@ class EnergyControlCard extends HTMLElement {
   }
 
   getCardSize() {
-    return 8;
+    return 10;
   }
 
   getGridOptions() {
-    return { columns: 12, min_columns: 6, rows: 8, min_rows: 6 };
+    return { columns: "full", min_columns: 6, rows: 10, min_rows: 6 };
   }
 
   connectedCallback() {
@@ -128,6 +139,9 @@ class EnergyControlCard extends HTMLElement {
   // ------------------------------------------------------------------ render
   _render() {
     if (!this.shadowRoot) return;
+    // Every update re-renders: keep the horizontal scroll position per tab.
+    const scroller = this.shadowRoot.querySelector(".scroll");
+    if (scroller) this._scroll[this._renderedTab] = { left: scroller.scrollLeft, atEnd: scroller.scrollLeft + scroller.clientWidth >= scroller.scrollWidth - 2 };
     const d = this._data;
     const title = this._config?.title ?? "Energy Control";
     let body;
@@ -144,6 +158,7 @@ class EnergyControlCard extends HTMLElement {
     ]
       .map(([k, l]) => `<button class="tab ${this._tab === k ? "on" : ""}" data-tab="${k}">${l}</button>`)
       .join("");
+    const controls = this._tab === "summary" ? "" : this._controls();
 
     this.shadowRoot.innerHTML = `
       <style>${STYLE}</style>
@@ -152,17 +167,57 @@ class EnergyControlCard extends HTMLElement {
           <div class="title">${esc(title)}</div>
           ${d ? this._headline(d) : ""}
         </div>
-        <div class="tabs">${tabs}</div>
+        <div class="tabs">${tabs}<span class="spacer"></span>${controls}</div>
         <div class="body">${body}</div>
         <div class="tip" hidden></div>
       </ha-card>`;
+    this._renderedTab = this._tab;
     this.shadowRoot.querySelectorAll(".tab").forEach((b) =>
       b.addEventListener("click", () => {
         this._tab = b.dataset.tab;
         this._render();
       }),
     );
+    this.shadowRoot.querySelectorAll("[data-hours]").forEach((b) =>
+      b.addEventListener("click", () => {
+        this._hours = Number(b.dataset.hours);
+        this._scroll = {};
+        this._render();
+      }),
+    );
+    this.shadowRoot.querySelectorAll("[data-zoom]").forEach((b) =>
+      b.addEventListener("click", () => {
+        const i = ZOOMS.indexOf(this._hourWidth);
+        const next = Number(b.dataset.zoom) > 0 ? Math.min(i + 1, ZOOMS.length - 1) : Math.max(i - 1, 0);
+        this._hourWidth = ZOOMS[next < 0 ? 0 : next];
+        this._render();
+      }),
+    );
+    this._restoreScroll();
     this._bindHover();
+  }
+
+  _controls() {
+    const zoomIdx = Math.max(0, ZOOMS.indexOf(this._hourWidth));
+    const ranges =
+      this._tab === "plan"
+        ? RANGES.map((h) => `<button class="seg ${this._hours === h ? "on" : ""}" data-hours="${h}">${h}h</button>`).join("")
+        : "";
+    return `<span class="ctl">${ranges}
+      <button class="seg" data-zoom="-1" title="Zoom out (fit)" ${zoomIdx === 0 ? "disabled" : ""}>−</button>
+      <button class="seg" data-zoom="1" title="Zoom in (scroll)" ${zoomIdx === ZOOMS.length - 1 ? "disabled" : ""}>+</button></span>`;
+  }
+
+  _restoreScroll() {
+    const scroller = this.shadowRoot.querySelector(".scroll");
+    if (!scroller) return;
+    const saved = this._scroll[this._tab];
+    if (this._tab === "history") {
+      // Newest data on the right: follow it unless the user scrolled back.
+      scroller.scrollLeft = !saved || saved.atEnd ? scroller.scrollWidth : saved.left;
+    } else if (saved) {
+      scroller.scrollLeft = saved.left;
+    }
   }
 
   _headline(d) {
@@ -172,9 +227,10 @@ class EnergyControlCard extends HTMLElement {
       return t <= now && now < new Date(t.getTime() + s.hours * 3600e3);
     });
     const action = d.desired?.action ?? slot?.action;
+    const kind = action ? KINDS[kindOf(action, slot?.battery_kw)] : null;
     const chips = [
       `<span class="chip">${esc(d.mode)}</span>`,
-      action ? `<span class="chip" style="background:${ACTION_COLORS[action]}">${esc(ACTION_LABELS[action] ?? action)}</span>` : "",
+      kind ? `<span class="chip" style="background:${kind.color}">${esc(kind.label)}</span>` : "",
       d.soc != null ? `<span class="chip ghost">SoC ${Math.round(d.soc)}%</span>` : "",
       d.curtailing ? `<span class="chip" style="background:${C.neg}">PV curtailed</span>` : "",
       d.override ? `<span class="chip ghost">override until ${fmtTime(new Date(d.override.until))}</span>` : "",
@@ -184,94 +240,114 @@ class EnergyControlCard extends HTMLElement {
     return `<div class="chips">${chips}</div>${reason}`;
   }
 
+  /** Horizontal frame: fit to the card, or a fixed px/hour that scrolls. */
+  _frame(t0, tEnd) {
+    const avail = Math.max(120, this._width - AXIS_W);
+    const hours = (tEnd - t0) / 3600e3;
+    const W = Math.max(avail, this._hourWidth ? Math.round(hours * this._hourWidth) : 0);
+    const pad = 6;
+    const x = (t) => pad + ((t - t0) / (tEnd - t0 || 1)) * (W - 2 * pad);
+    return { W, x, scrolls: W > avail + 1, pxPerHour: (W - 2 * pad) / (hours || 1) };
+  }
+
+  _chart(main, axis, legend) {
+    this._chartWidth = main.w;
+    return `<div class="chart">
+        <div class="yaxis">${axis.render(AXIS_W)}</div>
+        <div class="scroll">${main.render()}</div>
+      </div>
+      <div class="legend">${legend}</div>`;
+  }
+
   // ------------------------------------------------------------- plan view
   _planView(d) {
     const slots = (d.plan?.slots ?? []).map((s) => ({ ...s, t: new Date(s.start).getTime() }));
     if (!slots.length) return `<div class="msg">No plan${d.last_error ? `: ${esc(d.last_error)}` : ""}</div>`;
     const t0 = slots[0].t;
-    const tEnd = Math.min(
-      slots[slots.length - 1].t + slots[slots.length - 1].hours * 3600e3,
-      t0 + Number(this._config.hours) * 3600e3,
-    );
-    const shown = slots.filter((s) => s.t < tEnd);
+    const tEnd = Math.min(slots[slots.length - 1].t + slots[slots.length - 1].hours * 3600e3, t0 + this._hours * 3600e3);
+    const shown = slots.filter((s) => s.t < tEnd).map((s) => ({ ...s, kind: kindOf(s.action, s.battery_kw) }));
     this._hoverRows = shown.map((s) => ({
       t: s.t,
       t1: s.t + s.hours * 3600e3,
       html: `<b>${fmtDay(new Date(s.t))} ${fmtTime(new Date(s.t))}</b>
-        <div><i style="background:${ACTION_COLORS[s.action]}"></i>${esc(ACTION_LABELS[s.action] ?? s.action)}</div>
+        <div><i style="--c:${KINDS[s.kind].color}"></i>${esc(KINDS[s.kind].label)}</div>
+        ${s.reason ? `<div class="r">${esc(s.reason)}</div>` : ""}
         <div>Import ${ct(s.import_price)} · Export ${ct(s.export_price)}</div>
         <div>PV ${kw(s.pv_kw)} · Load ${kw(s.load_kw)}</div>
         <div>Battery ${kw(s.battery_kw)} · Grid ${kw(s.grid_kw)}</div>
         ${s.curtail_kw > 0 ? `<div>Curtail ${kw(s.curtail_kw)}</div>` : ""}
-        <div>SoC → ${s.soc_end_pct.toFixed(0)}%</div>
-        ${s.reason ? `<div class="r">${esc(s.reason)}</div>` : ""}`,
+        <div>SoC → ${s.soc_end_pct.toFixed(0)}%</div>`,
     }));
 
-    const W = this._width;
-    const m = { l: 42, r: 10 };
-    const x = (t) => m.l + ((t - t0) / (tEnd - t0)) * (W - m.l - m.r);
+    const { W, x } = this._frame(t0, tEnd);
     const sw = (s) => Math.max(1, x(s.t + s.hours * 3600e3) - x(s.t));
-
     const g = new Svg(W);
-    // Action band
-    const bandY = 4;
-    g.text(4, bandY + 9, "action", "lbl");
-    for (const s of shown) g.rect(x(s.t), bandY, sw(s), 10, ACTION_COLORS[s.action]);
+    const a = new Svg(AXIS_W);
 
-    // Price pane
-    const pY = 22, pH = 90;
+    // Action band with labelled segments.
+    const bandY = 4, bandH = 20;
+    a.text(AXIS_W - 6, bandY + 14, "Action", "pane", "end");
+    g.band(shown.map((s) => ({ x0: x(s.t), x1: x(s.t) + sw(s), key: s.kind })), bandY, bandH, KINDS);
+
+    // Price pane.
+    const pY = bandY + bandH + 34, pH = 110;
     const prices = shown.flatMap((s) => [s.import_price * 100, s.export_price * 100]);
     const [pMin, pMax] = niceRange(Math.min(0, ...prices), Math.max(...prices));
     const py = (v) => pY + pH - ((v - pMin) / (pMax - pMin)) * pH;
-    g.axis(m.l, py, [pMin, pMax], "ct", W - m.r);
+    g.paneGrid(py, [pMin, pMax], W);
+    a.paneAxis(py, [pMin, pMax], "Price", "ct/kWh");
+    g.area(shown.map((s) => [x(s.t), x(s.t) + sw(s), py(Math.max(0, s.import_price * 100))]), py(0), C.price, 0.22);
     for (const s of shown) {
       const v = s.import_price * 100;
-      g.rect(x(s.t) + 0.5, Math.min(py(v), py(0)), Math.max(0.5, sw(s) - 1), Math.abs(py(v) - py(0)), v < 0 ? C.neg : C.price, 0.55);
+      if (v < 0) g.rect(x(s.t), py(0), sw(s), py(v) - py(0), C.neg, 0.45);
     }
-    g.path(shown.map((s) => [x(s.t), py(s.export_price * 100), x(s.t) + sw(s), py(s.export_price * 100)]).flat(), C.grid, { step: true, dash: "4 3" });
+    g.path(shown.flatMap((s) => [x(s.t), py(s.import_price * 100), x(s.t) + sw(s), py(s.import_price * 100)]), C.price, { width: 1.6 });
+    g.path(shown.flatMap((s) => [x(s.t), py(s.export_price * 100), x(s.t) + sw(s), py(s.export_price * 100)]), C.grid, { dash: "5 3", width: 1.4 });
 
-    // Power pane
-    const wY = pY + pH + 18, wH = 120;
-    const powers = shown.flatMap((s) => [s.pv_kw, s.load_kw, s.battery_kw, s.grid_kw, -s.load_kw]);
-    const [wMin, wMax] = niceRange(Math.min(0, ...powers), Math.max(...powers));
+    // Power pane: battery bars (+ charge / − discharge), PV area, load and grid lines.
+    const wY = pY + pH + 34, wH = 170;
+    const powers = shown.flatMap((s) => [s.pv_kw, s.load_kw, s.battery_kw, s.grid_kw]);
+    const [wMin, wMax] = niceRange(Math.min(0, ...powers), Math.max(0, ...powers));
     const wy = (v) => wY + wH - ((v - wMin) / (wMax - wMin)) * wH;
-    g.axis(m.l, wy, [wMin, wMax], "kW", W - m.r);
-    g.area(shown.map((s) => [x(s.t), x(s.t) + sw(s), wy(s.pv_kw)]), wy(0), C.pv, 0.35);
+    g.paneGrid(wy, [wMin, wMax], W);
+    a.paneAxis(wy, [wMin, wMax], "Power", "kW");
+    g.area(shown.map((s) => [x(s.t), x(s.t) + sw(s), wy(s.pv_kw)]), wy(0), C.pv, 0.3);
     for (const s of shown) {
       if (Math.abs(s.battery_kw) < 1e-3) continue;
-      const col = s.battery_kw > 0 ? C.charge : C.discharge;
-      g.rect(x(s.t) + 1, Math.min(wy(s.battery_kw), wy(0)), Math.max(0.5, sw(s) - 2), Math.abs(wy(s.battery_kw) - wy(0)), col, 0.85);
+      const col = KINDS[s.kind === "idle" || s.kind === "hold" ? (s.battery_kw > 0 ? "store" : "cover") : s.kind].color;
+      g.rect(x(s.t) + 1, Math.min(wy(s.battery_kw), wy(0)), Math.max(0.5, sw(s) - 2), Math.abs(wy(s.battery_kw) - wy(0)), col, 0.9);
     }
-    g.path(shown.map((s) => [x(s.t), wy(s.load_kw), x(s.t) + sw(s), wy(s.load_kw)]).flat(), C.load, { step: true });
-    g.path(shown.map((s) => [x(s.t), wy(s.grid_kw), x(s.t) + sw(s), wy(s.grid_kw)]).flat(), C.grid, { step: true, width: 1.2 });
+    g.path(shown.flatMap((s) => [x(s.t), wy(s.load_kw), x(s.t) + sw(s), wy(s.load_kw)]), C.load, { width: 1.8 });
+    g.path(shown.flatMap((s) => [x(s.t), wy(s.grid_kw), x(s.t) + sw(s), wy(s.grid_kw)]), C.grid, { width: 1.4, dash: "5 3" });
+    if (wMin < 0) {
+      g.text(x(t0) + 4, wy(wMin) - 4, "battery discharging ↓", "hint");
+    }
 
-    // SoC pane
-    const sY = wY + wH + 18, sH = 70;
+    // SoC pane.
+    const sY = wY + wH + 34, sH = 90;
     const sy = (v) => sY + sH - (v / 100) * sH;
-    g.axis(m.l, sy, [0, 100], "%", W - m.r, [0, 50, 100]);
-    g.hline(m.l, W - m.r, sy(d.min_soc), "var(--secondary-text-color)", "2 3");
-    g.hline(m.l, W - m.r, sy(d.max_soc), "var(--secondary-text-color)", "2 3");
+    g.paneGrid(sy, [0, 100], W, [0, 25, 50, 75, 100]);
+    a.paneAxis(sy, [0, 100], "SoC", "%", [0, 25, 50, 75, 100]);
+    g.socBand(sy(d.max_soc), sy(d.min_soc), W);
     const socPts = [[x(shown[0].t), sy(shown[0].soc_start_pct)], ...shown.map((s) => [x(s.t) + sw(s), sy(s.soc_end_pct)])];
-    g.path(socPts.flat(), C.soc, { width: 2 });
+    g.area(socPts.slice(1).map(([px, py2], i) => [socPts[i][0], px, py2]), sy(0), C.soc, 0.12);
+    g.path(socPts.flat(), C.soc, { width: 2.2 });
 
-    const bottom = sY + sH + 16;
-    g.timeAxis(x, t0, tEnd, bottom, sY + sH);
+    const bottom = sY + sH + 18;
+    g.timeAxis(x, t0, tEnd, bottom, sY + sH, this._frame(t0, tEnd).pxPerHour);
     g.nowLine(x(Date.now()), 2, sY + sH);
-    g.height = bottom + 4;
+    g.height = a.height = bottom + 4;
+    this._hoverGeom = { x };
 
-    const legend = [
-      [C.price, "Import price"],
-      [C.grid, "Export price / grid"],
+    const legend = legendHtml([
+      ...Object.values(KINDS).map((k) => [k.color, k.label]),
+      [C.price, "Import price", "line"],
+      [C.grid, "Export price / grid", "dash"],
       [C.pv, "PV forecast"],
-      [C.load, "Load forecast"],
-      [C.charge, "Charge"],
-      [C.discharge, "Discharge"],
-      [C.soc, "SoC plan"],
-    ]
-      .map(([c, l]) => `<span><i style="background:${c}"></i>${l}</span>`)
-      .join("");
-    this._hoverGeom = { x, top: 0, bottom: sY + sH };
-    return `<div class="chart">${g.render()}</div><div class="legend">${legend}</div>`;
+      [C.load, "Load forecast", "line"],
+      [C.soc, "SoC plan", "line"],
+    ]);
+    return this._chart(g, a, legend);
   }
 
   // ---------------------------------------------------------- history view
@@ -280,76 +356,88 @@ class EnergyControlCard extends HTMLElement {
     if (!rows.length) return `<div class="msg">No history yet — it fills per 15-minute slot while the integration runs.</div>`;
     const t0 = rows[0].t;
     const tEnd = rows[rows.length - 1].t + 15 * 60e3;
-    const W = this._width;
-    const m = { l: 42, r: 10 };
-    const x = (t) => m.l + ((t - t0) / (tEnd - t0 || 1)) * (W - m.l - m.r);
+    const { W, x, pxPerHour } = this._frame(t0, tEnd);
     const sw = Math.max(1, x(t0 + 15 * 60e3) - x(t0));
-    this._hoverRows = rows.map((r) => ({
-      t: r.t,
-      t1: r.t + 15 * 60e3,
-      html: `<b>${fmtDay(new Date(r.t))} ${fmtTime(new Date(r.t))}</b>
-        <div>Mode ${esc(r.mode)}${r.curtailed ? " · curtailed" : ""}</div>
-        <div><i style="background:${ACTION_COLORS[r.planned_action] ?? C.price}"></i>Planned ${esc(ACTION_LABELS[r.planned_action] ?? r.planned_action ?? "–")}</div>
-        <div>SoC plan ${r.planned_soc?.toFixed?.(0) ?? "–"}% · actual ${r.actual_soc?.toFixed?.(0) ?? "–"}%</div>
-        <div>Grid plan ${kw(r.planned_grid_kw)} · actual ${kw(r.actual_grid_kw)}</div>
-        <div>Battery plan ${kw(r.planned_battery_kw)} · actual ${kw(r.actual_battery_kw)}</div>
-        <div>Cost plan ${eur(r.planned_cost)} · actual ${eur(r.actual_cost)}</div>`,
-    }));
+    this._hoverRows = rows.map((r) => {
+      const kind = r.planned_action ? kindOf(r.planned_action, r.planned_battery_kw) : null;
+      return {
+        t: r.t,
+        t1: r.t + 15 * 60e3,
+        html: `<b>${fmtDay(new Date(r.t))} ${fmtTime(new Date(r.t))}</b>
+          <div>Mode ${esc(r.mode)}${r.curtailed ? " · curtailed" : ""}</div>
+          <div><i style="--c:${kind ? KINDS[kind].color : C.price}"></i>Planned ${esc(kind ? KINDS[kind].label : "–")}</div>
+          <div>SoC plan ${r.planned_soc?.toFixed?.(0) ?? "–"}% · actual ${r.actual_soc?.toFixed?.(0) ?? "–"}%</div>
+          <div>Grid plan ${kw(r.planned_grid_kw)} · actual ${kw(r.actual_grid_kw)}</div>
+          <div>Battery plan ${kw(r.planned_battery_kw)} · actual ${kw(r.actual_battery_kw)}</div>
+          <div>Cost plan ${eur(r.planned_cost)} · actual ${eur(r.actual_cost)}</div>`,
+      };
+    });
 
     const g = new Svg(W);
-    const bandY = 4;
-    g.text(4, bandY + 9, "plan", "lbl");
-    for (const r of rows) if (r.planned_action) g.rect(x(r.t), bandY, sw, 10, ACTION_COLORS[r.planned_action]);
+    const a = new Svg(AXIS_W);
+    const bandY = 4, bandH = 20;
+    a.text(AXIS_W - 6, bandY + 14, "Plan", "pane", "end");
+    g.band(
+      rows.filter((r) => r.planned_action).map((r) => ({ x0: x(r.t), x1: x(r.t) + sw, key: kindOf(r.planned_action, r.planned_battery_kw) })),
+      bandY,
+      bandH,
+      KINDS,
+    );
 
     // SoC
-    const sY = 22, sH = 90;
+    const sY = bandY + bandH + 34, sH = 100;
     const sy = (v) => sY + sH - (v / 100) * sH;
-    g.axis(m.l, sy, [0, 100], "%", W - m.r, [0, 50, 100]);
-    const line = (key, yf) =>
-      rows.filter((r) => r[key] != null).map((r) => [x(r.t) + sw, yf(r[key])]).flat();
+    g.paneGrid(sy, [0, 100], W, [0, 25, 50, 75, 100]);
+    a.paneAxis(sy, [0, 100], "SoC", "%", [0, 25, 50, 75, 100]);
+    const line = (key, yf) => rows.filter((r) => r[key] != null).flatMap((r) => [x(r.t) + sw, yf(r[key])]);
     g.path(line("planned_soc", sy), C.soc, { width: 2, dash: "5 3" });
-    g.path(line("actual_soc", sy), C.actual, { width: 2 });
+    g.path(line("actual_soc", sy), C.actual, { width: 2.2 });
 
-    // Grid & battery power
-    const wY = sY + sH + 18, wH = 120;
-    const vals = rows.flatMap((r) => [r.planned_grid_kw, r.actual_grid_kw, r.planned_battery_kw, r.actual_battery_kw]).filter((v) => v != null);
-    const [wMin, wMax] = niceRange(Math.min(0, ...vals), Math.max(0, ...vals));
-    const wy = (v) => wY + wH - ((v - wMin) / (wMax - wMin)) * wH;
-    g.axis(m.l, wy, [wMin, wMax], "kW", W - m.r);
-    const step = (key) =>
-      rows.filter((r) => r[key] != null).map((r) => [x(r.t), wy(r[key]), x(r.t) + sw, wy(r[key])]).flat();
-    g.path(step("planned_grid_kw"), C.grid, { step: true, dash: "5 3" });
-    g.path(step("actual_grid_kw"), C.grid, { step: true, width: 1.6 });
-    g.path(step("planned_battery_kw"), C.charge, { step: true, dash: "5 3" });
-    g.path(step("actual_battery_kw"), C.charge, { step: true, width: 1.6 });
+    // Battery power
+    const bY = sY + sH + 34, bH = 110;
+    const bVals = rows.flatMap((r) => [r.planned_battery_kw, r.actual_battery_kw]).filter((v) => v != null);
+    const [bMin, bMax] = niceRange(Math.min(0, ...bVals), Math.max(0, ...bVals));
+    const by = (v) => bY + bH - ((v - bMin) / (bMax - bMin)) * bH;
+    g.paneGrid(by, [bMin, bMax], W);
+    a.paneAxis(by, [bMin, bMax], "Battery", "kW");
+    const step = (key, yf) => rows.filter((r) => r[key] != null).flatMap((r) => [x(r.t), yf(r[key]), x(r.t) + sw, yf(r[key])]);
+    g.path(step("planned_battery_kw", by), C.soc, { dash: "5 3", width: 1.6 });
+    g.path(step("actual_battery_kw", by), C.actual, { width: 1.8 });
+
+    // Grid power
+    const gY = bY + bH + 34, gH = 110;
+    const gVals = rows.flatMap((r) => [r.planned_grid_kw, r.actual_grid_kw]).filter((v) => v != null);
+    const [gMin, gMax] = niceRange(Math.min(0, ...gVals), Math.max(0, ...gVals));
+    const gy = (v) => gY + gH - ((v - gMin) / (gMax - gMin)) * gH;
+    g.paneGrid(gy, [gMin, gMax], W);
+    a.paneAxis(gy, [gMin, gMax], "Grid", "kW");
+    g.path(step("planned_grid_kw", gy), C.soc, { dash: "5 3", width: 1.6 });
+    g.path(step("actual_grid_kw", gy), C.actual, { width: 1.8 });
 
     // Cumulative cost
-    const cY = wY + wH + 18, cH = 70;
+    const cY = gY + gH + 34, cH = 80;
     let accP = 0, accA = 0;
     const cum = rows.map((r) => ({ t: r.t, p: (accP += r.planned_cost ?? 0), a: (accA += r.actual_cost ?? 0) }));
     const [cMin, cMax] = niceRange(Math.min(0, ...cum.map((c) => Math.min(c.p, c.a))), Math.max(0, ...cum.map((c) => Math.max(c.p, c.a))));
     const cy = (v) => cY + cH - ((v - cMin) / (cMax - cMin)) * cH;
-    g.axis(m.l, cy, [cMin, cMax], "€", W - m.r);
-    g.path(cum.map((c) => [x(c.t) + sw, cy(c.p)]).flat(), C.price, { width: 2, dash: "5 3" });
-    g.path(cum.map((c) => [x(c.t) + sw, cy(c.a)]).flat(), C.actual, { width: 2 });
+    g.paneGrid(cy, [cMin, cMax], W);
+    a.paneAxis(cy, [cMin, cMax], "Cost", "€");
+    g.path(cum.flatMap((c) => [x(c.t) + sw, cy(c.p)]), C.soc, { width: 2, dash: "5 3" });
+    g.path(cum.flatMap((c) => [x(c.t) + sw, cy(c.a)]), C.actual, { width: 2.2 });
 
-    const bottom = cY + cH + 16;
-    g.timeAxis(x, t0, tEnd, bottom, cY + cH);
-    g.height = bottom + 4;
-    this._hoverGeom = { x, top: 0, bottom: cY + cH };
-    const legend = [
-      [C.soc, "SoC planned (dashed)"],
-      [C.actual, "SoC / cost actual"],
-      [C.grid, "Grid planned/actual"],
-      [C.charge, "Battery planned/actual"],
-      [C.price, "Cost planned (cum.)"],
-    ]
-      .map(([c, l]) => `<span><i style="background:${c}"></i>${l}</span>`)
-      .join("");
-    return `<div class="chart">${g.render()}</div><div class="legend">${legend}</div>`;
+    const bottom = cY + cH + 18;
+    g.timeAxis(x, t0, tEnd, bottom, cY + cH, pxPerHour);
+    g.height = a.height = bottom + 4;
+    this._hoverGeom = { x };
+    const legend = legendHtml([
+      ...Object.values(KINDS).map((k) => [k.color, k.label]),
+      [C.soc, "Planned", "dash"],
+      [C.actual, "Actual", "line"],
+    ]);
+    return this._chart(g, a, legend);
   }
 
-  // ---------------------------------------------------------- summary view
+// ---------------------------------------------------------- summary view
   _summaryView(d) {
     this._hoverRows = null;
     const plan = d.plan;
@@ -395,25 +483,25 @@ class EnergyControlCard extends HTMLElement {
 
   // ------------------------------------------------------------------ hover
   _bindHover() {
-    const svg = this.shadowRoot.querySelector("svg");
+    const svg = this.shadowRoot.querySelector(".scroll svg");
     const tip = this.shadowRoot.querySelector(".tip");
     if (!svg || !this._hoverRows || !this._hoverGeom) return;
-    const cursor = this.shadowRoot.querySelector(".cursor");
+    const cursor = svg.querySelector(".cursor");
+    const hide = () => {
+      tip.hidden = true;
+      cursor?.setAttribute("visibility", "hidden");
+    };
     const move = (ev) => {
       const rect = svg.getBoundingClientRect();
-      const px = ((ev.clientX - rect.left) / rect.width) * this._width;
+      const px = ((ev.clientX - rect.left) / rect.width) * this._chartWidth;
       const row = this._hoverRows.find((r) => this._hoverGeom.x(r.t) <= px && px < this._hoverGeom.x(r.t1));
-      if (!row) {
-        tip.hidden = true;
-        cursor?.setAttribute("visibility", "hidden");
-        return;
-      }
+      if (!row) return hide();
       tip.innerHTML = row.html;
       tip.hidden = false;
       const card = this.shadowRoot.querySelector("ha-card").getBoundingClientRect();
-      const left = ev.clientX - card.left + 12;
-      tip.style.left = `${Math.min(left, card.width - tip.offsetWidth - 8)}px`;
-      tip.style.top = `${ev.clientY - card.top + 12}px`;
+      const left = ev.clientX - card.left + 14;
+      tip.style.left = `${Math.max(4, Math.min(left, card.width - tip.offsetWidth - 8))}px`;
+      tip.style.top = `${ev.clientY - card.top + 14}px`;
       if (cursor) {
         const cx = this._hoverGeom.x(row.t);
         cursor.setAttribute("x", cx);
@@ -422,10 +510,8 @@ class EnergyControlCard extends HTMLElement {
       }
     };
     svg.addEventListener("pointermove", move);
-    svg.addEventListener("pointerleave", () => {
-      tip.hidden = true;
-      cursor?.setAttribute("visibility", "hidden");
-    });
+    svg.addEventListener("pointerleave", hide);
+    this.shadowRoot.querySelector(".scroll")?.addEventListener("scroll", hide, { passive: true });
   }
 }
 
@@ -439,12 +525,9 @@ class Svg {
     this.parts.push(`<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}" fill="${fill}" fill-opacity="${op}"/>`);
   }
   text(x, y, s, cls = "", anchor = "start") {
-    this.parts.push(`<text x="${x}" y="${y}" class="${cls}" text-anchor="${anchor}">${esc(s)}</text>`);
+    this.parts.push(`<text x="${x.toFixed ? x.toFixed(1) : x}" y="${y.toFixed ? y.toFixed(1) : y}" class="${cls}" text-anchor="${anchor}">${esc(s)}</text>`);
   }
-  hline(x1, x2, y, stroke, dash = "") {
-    this.parts.push(`<line x1="${x1}" x2="${x2}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" stroke="${stroke}" stroke-dasharray="${dash}" stroke-width="1" opacity="0.6"/>`);
-  }
-  path(coords, stroke, { width = 1.4, dash = "", step = false } = {}) {
+  path(coords, stroke, { width = 1.4, dash = "" } = {}) {
     if (coords.length < 4) return;
     let d = `M${coords[0].toFixed(1)},${coords[1].toFixed(1)}`;
     for (let i = 2; i < coords.length; i += 2) d += `L${coords[i].toFixed(1)},${coords[i + 1].toFixed(1)}`;
@@ -457,35 +540,60 @@ class Svg {
     d += `L${steps[steps.length - 1][1].toFixed(1)},${y0.toFixed(1)}Z`;
     this.parts.push(`<path d="${d}" fill="${fill}" fill-opacity="${op}" stroke="none"/>`);
   }
-  axis(x0, yf, [min, max], unit, x1, ticks) {
-    const t = ticks ?? niceTicks(min, max, 4);
-    for (const v of t) {
-      const y = yf(v);
-      this.parts.push(`<line x1="${x0}" x2="${x1}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" class="grid${v === 0 ? " zero" : ""}"/>`);
-      this.text(x0 - 4, y + 3, `${+v.toFixed(2)}`, "lbl", "end");
+  /** Coloured action band; consecutive equal segments merge and get a label when they fit. */
+  band(segments, y, h, kinds) {
+    const merged = [];
+    for (const s of segments) {
+      const last = merged[merged.length - 1];
+      if (last && last.key === s.key && Math.abs(last.x1 - s.x0) < 1.5) last.x1 = s.x1;
+      else merged.push({ ...s });
     }
-    this.text(x0 - 4, yf(max) - 3 < 10 ? 10 : yf(max) - 3, unit, "lbl unit", "end");
+    for (const m of merged) {
+      const k = kinds[m.key];
+      this.parts.push(`<rect x="${m.x0.toFixed(1)}" y="${y}" width="${Math.max(1, m.x1 - m.x0).toFixed(1)}" height="${h}" rx="3" fill="${k.color}"/>`);
+      const label = k.label.length * 6.2 + 10 < m.x1 - m.x0 ? k.label : null;
+      if (label) this.text((m.x0 + m.x1) / 2, y + h / 2 + 4, label, "bandlbl", "middle");
+    }
   }
-  timeAxis(x, t0, t1, y, gridBottom) {
-    const span = t1 - t0;
-    const stepH = span > 30 * 3600e3 ? 6 : span > 12 * 3600e3 ? 3 : 1;
+  paneGrid(yf, [min, max], x1, ticks) {
+    for (const v of ticks ?? niceTicks(min, max, 4)) {
+      const y = yf(v);
+      this.parts.push(`<line x1="0" x2="${x1}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" class="grid${v === 0 ? " zero" : ""}"/>`);
+    }
+  }
+  paneAxis(yf, [min, max], title, unit, ticks) {
+    this.text(this.w - 6, yf(max) - 20, title, "pane", "end");
+    this.text(this.w - 6, yf(max) - 9, unit, "lbl unit", "end");
+    for (const v of ticks ?? niceTicks(min, max, 4)) this.text(this.w - 6, yf(v) + 4, `${+v.toFixed(2)}`, "lbl", "end");
+  }
+  socBand(yTop, yBottom, x1) {
+    this.parts.push(`<rect x="0" y="${yTop.toFixed(1)}" width="${x1}" height="${Math.max(0, yBottom - yTop).toFixed(1)}" class="socband"/>`);
+  }
+  timeAxis(x, t0, t1, y, gridBottom, pxPerHour = 20) {
+    const stepH = [1, 2, 3, 6, 12].find((h) => h * pxPerHour >= 46) ?? 12;
     const start = new Date(t0);
     start.setMinutes(0, 0, 0);
     for (let t = start.getTime(); t <= t1; t += 3600e3) {
       const d = new Date(t);
-      if (t < t0 || d.getHours() % stepH) continue;
+      if (t < t0) continue;
       const px = x(t);
       const midnight = d.getHours() === 0;
+      if (d.getHours() % stepH && !midnight) {
+        if (pxPerHour >= 12) this.parts.push(`<line x1="${px.toFixed(1)}" x2="${px.toFixed(1)}" y1="${gridBottom}" y2="${gridBottom + 3}" class="tick"/>`);
+        continue;
+      }
       this.parts.push(`<line x1="${px.toFixed(1)}" x2="${px.toFixed(1)}" y1="0" y2="${gridBottom}" class="vgrid${midnight ? " day" : ""}"/>`);
-      this.text(px, y, midnight ? fmtDay(d) : `${String(d.getHours()).padStart(2, "0")}:00`, "lbl", "middle");
+      this.text(px, y, midnight ? fmtDay(d) : `${String(d.getHours()).padStart(2, "0")}:00`, midnight ? "lbl day" : "lbl", "middle");
     }
   }
   nowLine(px, y0, y1) {
+    this.parts.push(`<rect x="0" y="${y0}" width="${Math.max(0, px).toFixed(1)}" height="${y1 - y0}" class="past"/>`);
     this.parts.push(`<line x1="${px.toFixed(1)}" x2="${px.toFixed(1)}" y1="${y0}" y2="${y1}" class="now"/>`);
   }
-  render() {
-    const cursor = `<rect class="cursor" x="0" y="0" width="1" height="${this.height}" visibility="hidden"/>`;
-    return `<svg viewBox="0 0 ${this.w} ${this.height}" width="100%" height="${this.height}" preserveAspectRatio="none">${cursor}${this.parts.join("")}</svg>`;
+  render(fixedWidth) {
+    const w = fixedWidth ?? this.w;
+    const cursor = fixedWidth ? "" : `<rect class="cursor" x="0" y="0" width="1" height="${this.height}" visibility="hidden"/>`;
+    return `<svg viewBox="0 0 ${w} ${this.height}" width="${w}" height="${this.height}">${cursor}${this.parts.join("")}</svg>`;
   }
 }
 
@@ -510,23 +618,42 @@ const STYLE = `
   .chip.ghost { background: transparent; color: var(--primary-text-color); border: 1px solid var(--divider-color); }
   .chip.warn { background: var(--warning-color, #e0a800); }
   .reason { font-size: .85em; color: var(--secondary-text-color); }
-  .tabs { display:flex; gap:4px; border-bottom: 1px solid var(--divider-color); margin: 4px 0 8px; }
+  .tabs { display:flex; flex-wrap:wrap; align-items:center; gap:4px; border-bottom: 1px solid var(--divider-color); margin: 4px 0 8px; }
+  .tabs .spacer { flex: 1; }
   .tab { background:none; border:none; padding:6px 10px; cursor:pointer; color: var(--secondary-text-color); font: inherit; font-size:.9em; border-bottom: 2px solid transparent; }
   .tab.on { color: var(--primary-color); border-bottom-color: var(--primary-color); }
-  .chart svg { display:block; touch-action: pan-y; }
-  .chart .lbl { font-size: 10px; fill: var(--secondary-text-color); }
-  .chart .grid { stroke: var(--divider-color); stroke-width: .6; }
-  .chart .grid.zero { stroke: var(--secondary-text-color); stroke-width: .8; }
-  .chart .vgrid { stroke: var(--divider-color); stroke-width: .5; opacity: .6; }
-  .chart .vgrid.day { stroke: var(--secondary-text-color); opacity: .8; }
-  .chart .now { stroke: var(--primary-color); stroke-width: 1.5; stroke-dasharray: 3 2; }
-  .chart .cursor { fill: var(--primary-text-color); fill-opacity: .08; }
-  .legend { display:flex; flex-wrap:wrap; gap:4px 12px; font-size:.78em; color: var(--secondary-text-color); margin-top:4px; }
-  .legend i, .tip i { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:4px; vertical-align:-1px; }
+  .ctl { display:inline-flex; gap:2px; padding-bottom: 4px; }
+  .seg { background:none; border:1px solid var(--divider-color); color: var(--secondary-text-color); font: inherit; font-size:.78em;
+         padding: 2px 8px; border-radius: 6px; cursor:pointer; min-width: 28px; }
+  .seg.on { color: var(--text-primary-color, #fff); background: var(--primary-color); border-color: var(--primary-color); }
+  .seg:disabled { opacity: .4; cursor: default; }
+  .chart { display:flex; align-items:flex-start; }
+  .yaxis { flex: 0 0 ${AXIS_W}px; }
+  .scroll { flex: 1 1 auto; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
+  .chart svg { display:block; touch-action: pan-x pan-y; }
+  .chart .lbl { font-size: 11px; fill: var(--secondary-text-color); }
+  .chart .lbl.unit { font-size: 10px; }
+  .chart .lbl.day { font-weight: 600; fill: var(--primary-text-color); }
+  .chart .pane { font-size: 10.5px; font-weight: 600; fill: var(--primary-text-color); }
+  .chart .hint { font-size: 10px; fill: var(--secondary-text-color); opacity: .8; }
+  .chart .bandlbl { font-size: 11px; font-weight: 600; fill: #fff; paint-order: stroke; stroke: rgba(0,0,0,.25); stroke-width: 2px; }
+  .chart .grid { stroke: var(--divider-color); stroke-width: .7; }
+  .chart .grid.zero { stroke: var(--secondary-text-color); stroke-width: 1; }
+  .chart .vgrid { stroke: var(--divider-color); stroke-width: .6; }
+  .chart .vgrid.day { stroke: var(--secondary-text-color); stroke-width: 1; }
+  .chart .tick { stroke: var(--secondary-text-color); stroke-width: .6; }
+  .chart .socband { fill: var(--ec-soc, #3b82f6); fill-opacity: .05; }
+  .chart .past { fill: var(--secondary-text-color); fill-opacity: .07; }
+  .chart .now { stroke: var(--primary-color); stroke-width: 2; stroke-dasharray: 4 3; }
+  .chart .cursor { fill: var(--primary-text-color); fill-opacity: .1; }
+  .legend { display:flex; flex-wrap:wrap; gap:4px 14px; font-size:.8em; color: var(--secondary-text-color); margin-top:6px; padding-left: ${AXIS_W}px; }
+  .legend i, .tip i { display:inline-block; width:12px; height:10px; border-radius:2px; margin-right:5px; vertical-align:-1px; background: var(--c); }
+  .legend i.dash, .legend i.line { height: 0; border-top: 2px dashed var(--c); background: none; vertical-align: 3px; }
+  .legend i.line { border-top-style: solid; }
   .msg { padding: 24px 8px; color: var(--secondary-text-color); text-align:center; }
   .msg.err, .errtxt { color: var(--error-color, #d6455d); }
   .tip { position:absolute; z-index:2; pointer-events:none; background: var(--card-background-color, #fff); color: var(--primary-text-color);
-         border: 1px solid var(--divider-color); border-radius: 6px; padding: 6px 8px; font-size: .78em; line-height: 1.45; box-shadow: 0 2px 8px rgba(0,0,0,.2); max-width: 260px; }
+         border: 1px solid var(--divider-color); border-radius: 6px; padding: 6px 8px; font-size: .8em; line-height: 1.45; box-shadow: 0 2px 8px rgba(0,0,0,.2); width: max-content; max-width: 270px; }
   .tip .r { color: var(--secondary-text-color); font-style: italic; }
   table.sum { width:100%; border-collapse: collapse; font-size:.9em; }
   table.sum th { text-align:left; font-weight:400; color: var(--secondary-text-color); padding:4px 8px 4px 0; vertical-align:top; width:42%; }

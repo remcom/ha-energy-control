@@ -201,9 +201,13 @@ def test_low_load_worth_covering_lets_ess_cover_it():
     """Load below one SoC step while energy is dearest now: the ESS may cover it."""
     prices = [0.40] * 16 + [0.20] * 16
     plan = optimize(make_slots(prices, load=0.0625), battery(43), GridParams(), Strategy(), now=T0)
-    idle_import = [s for s in plan.slots[:16] if abs(s.battery_kw) < 1e-6 and s.grid_kw > 0]
-    assert idle_import
-    assert all(s.action == Action.SELF_CONSUME and s.reason == "battery covers load" for s in idle_import)
+    covered = [s for s in plan.slots[:16] if s.reason == "battery covers load"]
+    assert covered
+    for s in covered:
+        # Reported as the ESS will execute it: battery supplies the load, no grid import.
+        assert s.action == Action.SELF_CONSUME
+        assert s.grid_kw == pytest.approx(0.0)
+        assert s.battery_kw == pytest.approx(-s.load_kw / 0.95)
 
 
 def test_at_minimum_soc_with_import_is_hold():

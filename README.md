@@ -69,14 +69,21 @@ The card is loaded automatically. Add it to any dashboard:
 
 ```yaml
 type: custom:energy-control-card
-hours: 36          # plan window shown
+hours: 36          # plan window shown (12/24/36/48 buttons switch it on the card)
 history_hours: 24  # planned vs actual window
+hour_width: 0      # px per hour: 0 = fit the card; e.g. 48 = wider chart that scrolls sideways
 ```
 
 Tabs: **Plan** (action band, import/export price, PV & load forecast, planned battery/grid power,
 SoC plan, “now” marker, hover details with the reason for each decision), **Planned vs actual**
-(SoC, grid and battery power, cumulative cost), **Summary** (mode, next windows, cost & savings,
+(SoC, battery and grid power, cumulative cost), **Summary** (mode, next windows, cost & savings,
 current ESS setpoints).
+
+The action band splits self consumption by what the battery does: **Battery → house** (battery
+covers the load), **PV → battery** and **Idle**; **Hold** means the grid covers the house while the
+battery is saved. **−/+** zoom out/in: zoomed in, the chart scrolls sideways while the y-axis stays
+in place. The card takes the full width in a sections dashboard; for even more room put it in a
+*Panel* view or a wide section.
 
 Entities for your own cards: `sensor.energy_control_action` (with `reason`), `…_planned_grid_power`,
 `…_planned_battery_power`, `…_target_soc`, `…_next_grid_charge`, `…_next_grid_discharge`,
