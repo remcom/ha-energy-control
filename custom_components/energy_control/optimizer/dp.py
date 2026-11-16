@@ -26,6 +26,7 @@ from .model import (
 )
 
 EPS = 1e-6
+MIN_FLOW_KWH = 1e-3  # grid energy per slot below this counts as none
 INF = math.inf
 
 
@@ -181,7 +182,11 @@ def optimize(
     n_slots = len(slots)
     value = [-max(0.0, soc_of[i] - battery.min_soc_kwh) * tv for i in range(n_states)]
     choice: list[list[int]] = [[0] * n_states for _ in range(n_slots)]
+    # Cost-to-go after each slot: its slope is the value of stored energy,
+    # which classifies "do nothing" slots (hold vs. let the ESS cover the load).
+    after: list[list[float]] = [value] * n_slots
     for t in range(n_slots - 1, -1, -1):
+        after[t] = value
         options = flows[t]
         new_value = [INF] * n_states
         row = choice[t]
@@ -218,12 +223,21 @@ def optimize(
         soc_end = soc_of[i]
         total_cost += flow.money
         wear_cost += flow.wear
-        plan.slots.append(_slot_plan(slot, d * step, flow, soc_start, soc_end, step, battery))
+        plan.slots.append(
+            _slot_plan(slot, d * step, flow, soc_start, soc_end, step, battery, _marginal_values(after[t], i, step))
+        )
     plan.total_cost = total_cost
     plan.wear_cost = wear_cost
     plan.baseline_cost = baseline_cost(slots)
     plan.soc_end_kwh = soc_of[i]
     return plan
+
+
+def _marginal_values(cost_to_go: list[float], j: int, step: float) -> tuple[float | None, float | None]:
+    """EUR per stored kWh of having one step less / one step more after a slot."""
+    less = (cost_to_go[j - 1] - cost_to_go[j]) / step if j > 0 else None
+    more = (cost_to_go[j] - cost_to_go[j + 1]) / step if j + 1 < len(cost_to_go) else None
+    return less, more
 
 
 def _slot_plan(
@@ -234,8 +248,16 @@ def _slot_plan(
     soc_end: float,
     step: float,
     battery: BatteryParams,
+    marginal: tuple[float | None, float | None] = (None, None),
 ) -> SlotPlan:
-    """Classify a DP decision into an action the controller can execute."""
+    """Classify a DP decision into an action the controller can execute.
+
+    A slot without planned battery power is executed as HOLD (no discharge)
+    when the battery should not cover the load, and as SELF_CONSUME when it
+    should but the SoC grid is too coarse to plan it (load below one SoC step).
+    The decision compares what covering the load now is worth with what the
+    stored energy is worth later (slope of the DP cost-to-go).
+    """
     reason = ""
     if delta > EPS:
         if flow.grid_charged > 1e-3:
@@ -252,14 +274,27 @@ def _slot_plan(
             action = Action.SELF_CONSUME
             reason = "battery covers load"
     else:
-        can_discharge = soc_start - step >= battery.min_soc_kwh - EPS
-        can_charge = soc_start + step <= battery.max_soc_kwh + EPS
-        if flow.grid_import > step and can_discharge:
-            action = Action.HOLD
-            reason = "save battery for higher prices"
-        elif flow.grid_export > step and can_charge:
-            action = Action.HOLD
-            reason = "keep room for cheaper energy later"
+        value_less, value_more = marginal
+        can_discharge = soc_start - step >= battery.min_soc_kwh - EPS and value_less is not None
+        can_charge = soc_start + step <= battery.max_soc_kwh + EPS and value_more is not None
+        if flow.grid_import > MIN_FLOW_KWH:
+            if not can_discharge:
+                # Do not let the ESS go below our minimum (its own may be lower).
+                action = Action.HOLD
+                reason = "battery at minimum SoC"
+            elif slot.import_price * battery.discharge_efficiency - battery.cycle_cost > value_less + EPS:  # type: ignore[operator]
+                action = Action.SELF_CONSUME
+                reason = "battery covers load"
+            else:
+                action = Action.HOLD
+                reason = "save battery for higher prices"
+        elif flow.grid_export > MIN_FLOW_KWH and can_charge:
+            if value_more * battery.charge_efficiency > slot.export_price + EPS:  # type: ignore[operator]
+                action = Action.SELF_CONSUME
+                reason = "store PV surplus"
+            else:
+                action = Action.HOLD
+                reason = "keep room for cheaper energy later"
         else:
             action = Action.SELF_CONSUME
             reason = "idle"

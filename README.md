@@ -56,7 +56,7 @@ The arbitrage margin is only a hurdle for the optimizer: it is never part of a r
 | Action | ESS writes |
 |---|---|
 | Self consumption | setpoint = idle setpoint, limits = original |
-| Hold | max inverter power = 0 (grid covers load); charging blocked only when the plan exports PV on purpose |
+| Hold | max inverter power = 0 (grid covers load); charging blocked only when the plan exports PV on purpose. Used whenever the plan keeps the battery idle while importing: stored energy is worth more later, or the SoC is at the minimum |
 | Charge from grid | setpoint = max import, max charge power = planned charge power |
 | Discharge to grid | setpoint = −max export, max inverter power = planned discharge power |
 | Curtail (negative prices) | max feed‑in = 0, PV limit follows house load (grid import ≈ 50 W) |

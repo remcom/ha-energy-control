@@ -180,3 +180,34 @@ def test_reported_cost_excludes_arbitrage_hurdle():
     assert plan.wear_cost == pytest.approx(sum(s.wear_cost for s in plan.slots))
     discharged = sum(-s.battery_kw * s.hours for s in plan.slots if s.battery_kw < 0)
     assert plan.wear_cost == pytest.approx(discharged * 0.02)
+
+
+def test_low_load_saved_for_evening_is_hold():
+    """Regression (live test 2026-11-15): load below one SoC step, evening dearer.
+
+    The plan keeps the battery at 0 W; that slot must be HOLD, not an "idle"
+    SELF_CONSUME that lets the ESS cover the load anyway.
+    """
+    prices = [0.25] * 16 + [0.40] * 16
+    plan = optimize(make_slots(prices, load=0.0625), battery(43), GridParams(), Strategy(), now=T0)
+    first = plan.slots[0]
+    assert abs(first.battery_kw) < 1e-6
+    assert first.grid_kw > 0
+    assert first.action == Action.HOLD
+    assert first.reason == "save battery for higher prices"
+
+
+def test_low_load_worth_covering_lets_ess_cover_it():
+    """Load below one SoC step while energy is dearest now: the ESS may cover it."""
+    prices = [0.40] * 16 + [0.20] * 16
+    plan = optimize(make_slots(prices, load=0.0625), battery(43), GridParams(), Strategy(), now=T0)
+    idle_import = [s for s in plan.slots[:16] if abs(s.battery_kw) < 1e-6 and s.grid_kw > 0]
+    assert idle_import
+    assert all(s.action == Action.SELF_CONSUME and s.reason == "battery covers load" for s in idle_import)
+
+
+def test_at_minimum_soc_with_import_is_hold():
+    """At the minimum SoC the ESS must not discharge further (its own minimum may be lower)."""
+    prices = [0.30] * 8
+    plan = optimize(make_slots(prices, load=0.2), battery(10, min_pct=10), GridParams(), Strategy(), now=T0)
+    assert all(s.action == Action.HOLD and s.reason == "battery at minimum SoC" for s in plan.slots)
