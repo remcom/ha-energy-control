@@ -26,7 +26,7 @@ AC-coupled PV inverter when export prices go negative.
 - **Safe by default** — starts in `advisory`. Original settings are saved before taking over and
   restored when switching to `off`/`advisory`, unloading, or stopping Home Assistant. Stale prices
   or SoC fall back to plain self consumption and raise a repair issue on write failures.
-- **Dashboard card** — bundled (no extra install): plan timeline, planned vs actual, summary.
+- **Dashboard card** — bundled (no extra install): one timeline with plan vs actual, summary.
 
 ## Install
 
@@ -69,15 +69,17 @@ The card is loaded automatically. Add it to any dashboard:
 
 ```yaml
 type: custom:energy-control-card
-hours: 36          # plan window shown (12/24/36/48 buttons switch it on the card)
-history_hours: 24  # planned vs actual window
-hour_width: 0      # px per hour: 0 = fit the card; e.g. 48 = wider chart that scrolls sideways
+hours: 36       # plan hours ahead (12/24/36/48 buttons switch it on the card)
+past_hours: 12  # history shown left of "now"
+hour_width: 0   # px per hour: 0 = fit the card; e.g. 48 = wider chart that scrolls sideways
 ```
 
-Tabs: **Plan** (action band, import/export price, PV & load forecast, planned battery/grid power,
-SoC plan, “now” marker, hover details with the reason for each decision), **Planned vs actual**
-(SoC, battery and grid power, cumulative cost), **Summary** (mode, next windows, cost & savings,
-current ESS setpoints).
+**Timeline** is one chart over past and future: left of the “now” line you see what was planned
+for each 15-minute slot next to what actually happened, right of it the plan. Everywhere **bars /
+blue = plan** and **red = actual**. Panes: action, battery power (▲ charge / ▼ discharge), grid
+power (▲ import / ▼ export), SoC, price, PV & load forecast. Hover a slot for details: the reason
+for a planned decision, or a plan-vs-actual table for a past slot. **Summary** lists mode, next
+windows, cost & savings and the current ESS setpoints.
 
 The action band splits self consumption by what the battery does: **Battery → house** (battery
 covers the load), **PV → battery** and **Idle**; **Hold** means the grid covers the house while the

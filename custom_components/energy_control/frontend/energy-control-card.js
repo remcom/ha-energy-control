@@ -55,19 +55,21 @@ class EnergyControlCard extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: "open" });
-    this._tab = "plan";
+    this._tab = "timeline";
     this._data = null;
     this._width = 600;
     this._scroll = {};
   }
 
   static getStubConfig() {
-    return { hours: 36, history_hours: 24 };
+    return { hours: 36, past_hours: 12 };
   }
 
   setConfig(config) {
-    this._config = { hours: 36, history_hours: 24, hour_width: 0, ...config };
-    if (this._config.tab) this._tab = this._config.tab;
+    this._config = { hours: 36, past_hours: 12, hour_width: 0, ...config };
+    // Older configs: "plan" / "history" tabs are now one timeline.
+    if (this._config.tab) this._tab = this._config.tab === "summary" ? "summary" : "timeline";
+    this._pastHours = Number(this._config.past_hours ?? this._config.history_hours ?? 12);
     this._hours = Number(this._config.hours);
     this._hourWidth = Number(this._config.hour_width) || 0;
     this._render();
@@ -109,7 +111,10 @@ class EnergyControlCard extends HTMLElement {
     if (!this._hass || this._subscribing || !this.isConnected) return;
     this._subscribing = true;
     try {
-      const msg = { type: "energy_control/subscribe", history_hours: Number(this._config?.history_hours ?? 24) };
+      const msg = {
+        type: "energy_control/subscribe",
+        history_hours: Math.max(Number(this._config?.history_hours ?? 0), Number(this._config?.past_hours ?? 12)),
+      };
       if (this._config?.entry_id) msg.entry_id = this._config.entry_id;
       this._unsub = await this._hass.connection.subscribeMessage((data) => {
         this._data = data;
@@ -147,13 +152,11 @@ class EnergyControlCard extends HTMLElement {
     let body;
     if (this._error) body = `<div class="msg err">${esc(this._error)}</div>`;
     else if (!d) body = `<div class="msg">Loading…</div>`;
-    else if (this._tab === "plan") body = this._planView(d);
-    else if (this._tab === "history") body = this._historyView(d);
+    else if (this._tab === "timeline") body = this._timelineView(d);
     else body = this._summaryView(d);
 
     const tabs = [
-      ["plan", "Plan"],
-      ["history", "Planned vs actual"],
+      ["timeline", "Timeline"],
       ["summary", "Summary"],
     ]
       .map(([k, l]) => `<button class="tab ${this._tab === k ? "on" : ""}" data-tab="${k}">${l}</button>`)
@@ -199,10 +202,9 @@ class EnergyControlCard extends HTMLElement {
 
   _controls() {
     const zoomIdx = Math.max(0, ZOOMS.indexOf(this._hourWidth));
-    const ranges =
-      this._tab === "plan"
-        ? RANGES.map((h) => `<button class="seg ${this._hours === h ? "on" : ""}" data-hours="${h}">${h}h</button>`).join("")
-        : "";
+    const ranges = RANGES.map(
+      (h) => `<button class="seg ${this._hours === h ? "on" : ""}" data-hours="${h}" title="Plan hours ahead">${h}h</button>`,
+    ).join("");
     return `<span class="ctl">${ranges}
       <button class="seg" data-zoom="-1" title="Zoom out (fit)" ${zoomIdx === 0 ? "disabled" : ""}>−</button>
       <button class="seg" data-zoom="1" title="Zoom in (scroll)" ${zoomIdx === ZOOMS.length - 1 ? "disabled" : ""}>+</button></span>`;
@@ -212,12 +214,8 @@ class EnergyControlCard extends HTMLElement {
     const scroller = this.shadowRoot.querySelector(".scroll");
     if (!scroller) return;
     const saved = this._scroll[this._tab];
-    if (this._tab === "history") {
-      // Newest data on the right: follow it unless the user scrolled back.
-      scroller.scrollLeft = !saved || saved.atEnd ? scroller.scrollWidth : saved.left;
-    } else if (saved) {
-      scroller.scrollLeft = saved.left;
-    }
+    if (saved) scroller.scrollLeft = saved.left;
+    else if (this._nowX != null) scroller.scrollLeft = Math.max(0, this._nowX - scroller.clientWidth / 4);
   }
 
   _headline(d) {
@@ -259,185 +257,166 @@ class EnergyControlCard extends HTMLElement {
       <div class="legend">${legend}</div>`;
   }
 
-  // ------------------------------------------------------------- plan view
-  _planView(d) {
-    const slots = (d.plan?.slots ?? []).map((s) => ({ ...s, t: new Date(s.start).getTime() }));
-    if (!slots.length) return `<div class="msg">No plan${d.last_error ? `: ${esc(d.last_error)}` : ""}</div>`;
-    const t0 = slots[0].t;
-    const tEnd = Math.min(slots[slots.length - 1].t + slots[slots.length - 1].hours * 3600e3, t0 + this._hours * 3600e3);
-    const shown = slots.filter((s) => s.t < tEnd).map((s) => ({ ...s, kind: kindOf(s.action, s.battery_kw) }));
-    this._hoverRows = shown.map((s) => ({
-      t: s.t,
-      t1: s.t + s.hours * 3600e3,
-      html: `<b>${fmtDay(new Date(s.t))} ${fmtTime(new Date(s.t))}</b>
-        <div><i style="--c:${KINDS[s.kind].color}"></i>${esc(KINDS[s.kind].label)}</div>
-        ${s.reason ? `<div class="r">${esc(s.reason)}</div>` : ""}
-        <div>Import ${ct(s.import_price)} · Export ${ct(s.export_price)}</div>
-        <div>PV ${kw(s.pv_kw)} · Load ${kw(s.load_kw)}</div>
-        <div>Battery ${kw(s.battery_kw)} · Grid ${kw(s.grid_kw)}</div>
-        ${s.curtail_kw > 0 ? `<div>Curtail ${kw(s.curtail_kw)}</div>` : ""}
-        <div>SoC → ${s.soc_end_pct.toFixed(0)}%</div>`,
-    }));
+  // --------------------------------------------------------- timeline view
+  /**
+   * One time axis: the past (left of "now") shows what was planned for each
+   * slot next to what actually happened; the future shows the plan.
+   * Everywhere: bars / blue = plan, red = actual.
+   */
+  _timelineView(d) {
+    const now = Date.now();
+    const SLOT = 15 * 60e3;
+    const t0 = Math.floor((now - this._pastHours * 3600e3) / SLOT) * SLOT;
+    const past = (d.history ?? [])
+      .map((r) => ({ ...r, t: new Date(r.start).getTime() }))
+      .filter((r) => r.t >= t0 && r.t < now)
+      .map((r) => ({ ...r, t1: r.t + SLOT, kind: r.planned_action ? kindOf(r.planned_action, r.planned_battery_kw) : null }));
+    const pastEnd = past.length ? past[past.length - 1].t1 : -Infinity;
+    const planSlots = (d.plan?.slots ?? []).map((s) => ({ ...s, t: new Date(s.start).getTime() }));
+    const last = planSlots[planSlots.length - 1];
+    const planEnd = last ? last.t + last.hours * 3600e3 : now;
+    const tEnd = Math.max(now + 3600e3, Math.min(planEnd, now + this._hours * 3600e3));
+    const future = planSlots
+      .map((s) => ({ ...s, t1: s.t + s.hours * 3600e3, kind: kindOf(s.action, s.battery_kw) }))
+      .filter((s) => s.t1 > Math.max(pastEnd, t0) && s.t < tEnd)
+      .map((s) => ({ ...s, t: Math.max(s.t, pastEnd, t0) }));
+    if (!past.length && !future.length) return `<div class="msg">No plan${d.last_error ? `: ${esc(d.last_error)}` : ""}</div>`;
 
-    const { W, x } = this._frame(t0, tEnd);
-    const sw = (s) => Math.max(1, x(s.t + s.hours * 3600e3) - x(s.t));
-    const g = new Svg(W);
-    const a = new Svg(AXIS_W);
-
-    // Action band with labelled segments.
-    const bandY = 4, bandH = 20;
-    a.text(AXIS_W - 6, bandY + 14, "Action", "pane", "end");
-    g.band(shown.map((s) => ({ x0: x(s.t), x1: x(s.t) + sw(s), key: s.kind })), bandY, bandH, KINDS);
-
-    // Price pane.
-    const pY = bandY + bandH + 34, pH = 110;
-    const prices = shown.flatMap((s) => [s.import_price * 100, s.export_price * 100]);
-    const [pMin, pMax] = niceRange(Math.min(0, ...prices), Math.max(...prices));
-    const py = (v) => pY + pH - ((v - pMin) / (pMax - pMin)) * pH;
-    g.paneGrid(py, [pMin, pMax], W);
-    a.paneAxis(py, [pMin, pMax], "Price", "ct/kWh");
-    g.area(shown.map((s) => [x(s.t), x(s.t) + sw(s), py(Math.max(0, s.import_price * 100))]), py(0), C.price, 0.22);
-    for (const s of shown) {
-      const v = s.import_price * 100;
-      if (v < 0) g.rect(x(s.t), py(0), sw(s), py(v) - py(0), C.neg, 0.45);
-    }
-    g.path(shown.flatMap((s) => [x(s.t), py(s.import_price * 100), x(s.t) + sw(s), py(s.import_price * 100)]), C.price, { width: 1.6 });
-    g.path(shown.flatMap((s) => [x(s.t), py(s.export_price * 100), x(s.t) + sw(s), py(s.export_price * 100)]), C.grid, { dash: "5 3", width: 1.4 });
-
-    // Power pane: battery bars (+ charge / − discharge), PV area, load and grid lines.
-    const wY = pY + pH + 34, wH = 170;
-    const powers = shown.flatMap((s) => [s.pv_kw, s.load_kw, s.battery_kw, s.grid_kw]);
-    const [wMin, wMax] = niceRange(Math.min(0, ...powers), Math.max(0, ...powers));
-    const wy = (v) => wY + wH - ((v - wMin) / (wMax - wMin)) * wH;
-    g.paneGrid(wy, [wMin, wMax], W);
-    a.paneAxis(wy, [wMin, wMax], "Power", "kW");
-    g.area(shown.map((s) => [x(s.t), x(s.t) + sw(s), wy(s.pv_kw)]), wy(0), C.pv, 0.3);
-    for (const s of shown) {
-      if (Math.abs(s.battery_kw) < 1e-3) continue;
-      const col = KINDS[s.kind === "idle" || s.kind === "hold" ? (s.battery_kw > 0 ? "store" : "cover") : s.kind].color;
-      g.rect(x(s.t) + 1, Math.min(wy(s.battery_kw), wy(0)), Math.max(0.5, sw(s) - 2), Math.abs(wy(s.battery_kw) - wy(0)), col, 0.9);
-    }
-    g.path(shown.flatMap((s) => [x(s.t), wy(s.load_kw), x(s.t) + sw(s), wy(s.load_kw)]), C.load, { width: 1.8 });
-    g.path(shown.flatMap((s) => [x(s.t), wy(s.grid_kw), x(s.t) + sw(s), wy(s.grid_kw)]), C.grid, { width: 1.4, dash: "5 3" });
-    if (wMin < 0) {
-      g.text(x(t0) + 4, wy(wMin) - 4, "battery discharging ↓", "hint");
-    }
-
-    // SoC pane.
-    const sY = wY + wH + 34, sH = 90;
-    const sy = (v) => sY + sH - (v / 100) * sH;
-    g.paneGrid(sy, [0, 100], W, [0, 25, 50, 75, 100]);
-    a.paneAxis(sy, [0, 100], "SoC", "%", [0, 25, 50, 75, 100]);
-    g.socBand(sy(d.max_soc), sy(d.min_soc), W);
-    const socPts = [[x(shown[0].t), sy(shown[0].soc_start_pct)], ...shown.map((s) => [x(s.t) + sw(s), sy(s.soc_end_pct)])];
-    g.area(socPts.slice(1).map(([px, py2], i) => [socPts[i][0], px, py2]), sy(0), C.soc, 0.12);
-    g.path(socPts.flat(), C.soc, { width: 2.2 });
-
-    const bottom = sY + sH + 18;
-    g.timeAxis(x, t0, tEnd, bottom, sY + sH, this._frame(t0, tEnd).pxPerHour);
-    g.nowLine(x(Date.now()), 2, sY + sH);
-    g.height = a.height = bottom + 4;
-    this._hoverGeom = { x };
-
-    const legend = legendHtml([
-      ...Object.values(KINDS).map((k) => [k.color, k.label]),
-      [C.price, "Import price", "line"],
-      [C.grid, "Export price / grid", "dash"],
-      [C.pv, "PV forecast"],
-      [C.load, "Load forecast", "line"],
-      [C.soc, "SoC plan", "line"],
-    ]);
-    return this._chart(g, a, legend);
-  }
-
-  // ---------------------------------------------------------- history view
-  _historyView(d) {
-    const rows = (d.history ?? []).map((r) => ({ ...r, t: new Date(r.start).getTime() }));
-    if (!rows.length) return `<div class="msg">No history yet — it fills per 15-minute slot while the integration runs.</div>`;
-    const t0 = rows[0].t;
-    const tEnd = rows[rows.length - 1].t + 15 * 60e3;
     const { W, x, pxPerHour } = this._frame(t0, tEnd);
-    const sw = Math.max(1, x(t0 + 15 * 60e3) - x(t0));
-    this._hoverRows = rows.map((r) => {
-      const kind = r.planned_action ? kindOf(r.planned_action, r.planned_battery_kw) : null;
-      return {
-        t: r.t,
-        t1: r.t + 15 * 60e3,
-        html: `<b>${fmtDay(new Date(r.t))} ${fmtTime(new Date(r.t))}</b>
-          <div>Mode ${esc(r.mode)}${r.curtailed ? " · curtailed" : ""}</div>
-          <div><i style="--c:${kind ? KINDS[kind].color : C.price}"></i>Planned ${esc(kind ? KINDS[kind].label : "–")}</div>
-          <div>SoC plan ${r.planned_soc?.toFixed?.(0) ?? "–"}% · actual ${r.actual_soc?.toFixed?.(0) ?? "–"}%</div>
-          <div>Grid plan ${kw(r.planned_grid_kw)} · actual ${kw(r.actual_grid_kw)}</div>
-          <div>Battery plan ${kw(r.planned_battery_kw)} · actual ${kw(r.actual_battery_kw)}</div>
-          <div>Cost plan ${eur(r.planned_cost)} · actual ${eur(r.actual_cost)}</div>`,
-      };
-    });
-
+    const wOf = (r) => Math.max(1, x(r.t1) - x(r.t));
     const g = new Svg(W);
     const a = new Svg(AXIS_W);
-    const bandY = 4, bandH = 20;
-    a.text(AXIS_W - 6, bandY + 14, "Plan", "pane", "end");
+    const nowX = x(now);
+    this._nowX = nowX;
+
+    this._hoverRows = [
+      ...past.map((r) => ({
+        t: r.t,
+        t1: r.t1,
+        html: `<b>${fmtDay(new Date(r.t))} ${fmtTime(new Date(r.t))}</b> <span class="muted">· past</span>
+          <div><i style="--c:${r.kind ? KINDS[r.kind].color : C.price}"></i>Planned: ${esc(r.kind ? KINDS[r.kind].label : "–")}</div>
+          <table class="cmp"><tr><th></th><th>plan</th><th>actual</th></tr>
+            <tr><td>Battery</td><td>${kw(r.planned_battery_kw)}</td><td>${kw(r.actual_battery_kw)}</td></tr>
+            <tr><td>Grid</td><td>${kw(r.planned_grid_kw)}</td><td>${kw(r.actual_grid_kw)}</td></tr>
+            <tr><td>SoC</td><td>${r.planned_soc?.toFixed?.(0) ?? "–"}%</td><td>${r.actual_soc?.toFixed?.(0) ?? "–"}%</td></tr>
+            <tr><td>Cost</td><td>${eur(r.planned_cost)}</td><td>${eur(r.actual_cost)}</td></tr></table>
+          <div class="muted">Import ${ct(r.import_price)} · mode ${esc(r.mode)}${r.curtailed ? " · curtailed" : ""}</div>`,
+      })),
+      ...future.map((s) => ({
+        t: s.t,
+        t1: s.t1,
+        html: `<b>${fmtDay(new Date(s.t))} ${fmtTime(new Date(s.t))}</b> <span class="muted">· plan</span>
+          <div><i style="--c:${KINDS[s.kind].color}"></i>${esc(KINDS[s.kind].label)}</div>
+          ${s.reason ? `<div class="r">${esc(s.reason)}</div>` : ""}
+          <div>Battery ${kw(s.battery_kw)} · Grid ${kw(s.grid_kw)}</div>
+          <div>PV ${kw(s.pv_kw)} · Load ${kw(s.load_kw)}</div>
+          ${s.curtail_kw > 0 ? `<div>Curtail ${kw(s.curtail_kw)}</div>` : ""}
+          <div>Import ${ct(s.import_price)} · Export ${ct(s.export_price)}</div>
+          <div>SoC → ${s.soc_end_pct.toFixed(0)}%</div>`,
+      })),
+    ];
+
+    // Action band: what was / is planned.
+    const bandY = 20, bandH = 20;
+    a.text(AXIS_W - 6, bandY + 14, "Action", "pane", "end");
     g.band(
-      rows.filter((r) => r.planned_action).map((r) => ({ x0: x(r.t), x1: x(r.t) + sw, key: kindOf(r.planned_action, r.planned_battery_kw) })),
+      [...past.filter((r) => r.kind), ...future].map((r) => ({ x0: x(r.t), x1: x(r.t) + wOf(r), key: r.kind })),
       bandY,
       bandH,
       KINDS,
     );
+    if (nowX > 150) g.text(nowX - 6, 13, "◀ past: plan vs actual", "era", "end");
+    g.text(nowX + 6, 13, "plan ▶", "era");
 
-    // SoC
-    const sY = bandY + bandH + 34, sH = 100;
-    const sy = (v) => sY + sH - (v / 100) * sH;
-    g.paneGrid(sy, [0, 100], W, [0, 25, 50, 75, 100]);
-    a.paneAxis(sy, [0, 100], "SoC", "%", [0, 25, 50, 75, 100]);
-    const line = (key, yf) => rows.filter((r) => r[key] != null).flatMap((r) => [x(r.t) + sw, yf(r[key])]);
-    g.path(line("planned_soc", sy), C.soc, { width: 2, dash: "5 3" });
-    g.path(line("actual_soc", sy), C.actual, { width: 2.2 });
-
-    // Battery power
-    const bY = sY + sH + 34, bH = 110;
-    const bVals = rows.flatMap((r) => [r.planned_battery_kw, r.actual_battery_kw]).filter((v) => v != null);
-    const [bMin, bMax] = niceRange(Math.min(0, ...bVals), Math.max(0, ...bVals));
+    // Battery pane: planned bars (faded in the past), actual as a red line.
+    const bY = bandY + bandH + 40, bH = 140;
+    const bVals = [...past.flatMap((r) => [r.planned_battery_kw, r.actual_battery_kw]), ...future.map((s) => s.battery_kw)].filter((v) => v != null);
+    const [bMin, bMax] = niceRange(Math.min(-0.5, ...bVals), Math.max(0.5, ...bVals));
     const by = (v) => bY + bH - ((v - bMin) / (bMax - bMin)) * bH;
     g.paneGrid(by, [bMin, bMax], W);
     a.paneAxis(by, [bMin, bMax], "Battery", "kW");
-    const step = (key, yf) => rows.filter((r) => r[key] != null).flatMap((r) => [x(r.t), yf(r[key]), x(r.t) + sw, yf(r[key])]);
-    g.path(step("planned_battery_kw", by), C.soc, { dash: "5 3", width: 1.6 });
-    g.path(step("actual_battery_kw", by), C.actual, { width: 1.8 });
+    const bar = (r, v, op) => {
+      if (v == null || Math.abs(v) < 1e-3) return;
+      const key = v > 0 ? (r.kind === "charge_grid" ? "charge_grid" : "store") : r.kind === "discharge_grid" ? "discharge_grid" : "cover";
+      g.rect(x(r.t) + 0.5, Math.min(by(v), by(0)), Math.max(0.5, wOf(r) - 1), Math.abs(by(v) - by(0)), KINDS[key].color, op);
+    };
+    for (const r of past) bar(r, r.planned_battery_kw, 0.35);
+    for (const s of future) bar(s, s.battery_kw, 0.9);
+    g.path(stepLine(past, "actual_battery_kw", x, by), C.actual, { width: 2 });
+    g.text(x(t0) + 4, by(bMax) + 12, "▲ charge", "hint");
+    g.text(x(t0) + 4, by(bMin) - 4, "▼ discharge", "hint");
 
-    // Grid power
-    const gY = bY + bH + 34, gH = 110;
-    const gVals = rows.flatMap((r) => [r.planned_grid_kw, r.actual_grid_kw]).filter((v) => v != null);
-    const [gMin, gMax] = niceRange(Math.min(0, ...gVals), Math.max(0, ...gVals));
+    // Grid pane: plan dashed, actual red.
+    const gY = bY + bH + 40, gH = 110;
+    const gVals = [...past.flatMap((r) => [r.planned_grid_kw, r.actual_grid_kw]), ...future.map((s) => s.grid_kw)].filter((v) => v != null);
+    const [gMin, gMax] = niceRange(Math.min(0, ...gVals), Math.max(0.5, ...gVals));
     const gy = (v) => gY + gH - ((v - gMin) / (gMax - gMin)) * gH;
     g.paneGrid(gy, [gMin, gMax], W);
     a.paneAxis(gy, [gMin, gMax], "Grid", "kW");
-    g.path(step("planned_grid_kw", gy), C.soc, { dash: "5 3", width: 1.6 });
-    g.path(step("actual_grid_kw", gy), C.actual, { width: 1.8 });
+    g.path([...stepLine(past, "planned_grid_kw", x, gy), ...stepLine(future, "grid_kw", x, gy)], C.grid, { width: 1.6, dash: "5 3" });
+    g.path(stepLine(past, "actual_grid_kw", x, gy), C.actual, { width: 2 });
+    g.text(x(t0) + 4, gy(gMax) + 12, "▲ import", "hint");
+    if (gMin < 0) g.text(x(t0) + 4, gy(gMin) - 4, "▼ export", "hint");
 
-    // Cumulative cost
-    const cY = gY + gH + 34, cH = 80;
-    let accP = 0, accA = 0;
-    const cum = rows.map((r) => ({ t: r.t, p: (accP += r.planned_cost ?? 0), a: (accA += r.actual_cost ?? 0) }));
-    const [cMin, cMax] = niceRange(Math.min(0, ...cum.map((c) => Math.min(c.p, c.a))), Math.max(0, ...cum.map((c) => Math.max(c.p, c.a))));
-    const cy = (v) => cY + cH - ((v - cMin) / (cMax - cMin)) * cH;
-    g.paneGrid(cy, [cMin, cMax], W);
-    a.paneAxis(cy, [cMin, cMax], "Cost", "€");
-    g.path(cum.flatMap((c) => [x(c.t) + sw, cy(c.p)]), C.soc, { width: 2, dash: "5 3" });
-    g.path(cum.flatMap((c) => [x(c.t) + sw, cy(c.a)]), C.actual, { width: 2.2 });
+    // SoC pane: plan blue, actual red.
+    const sY = gY + gH + 40, sH = 90;
+    const sy = (v) => sY + sH - (v / 100) * sH;
+    g.paneGrid(sy, [0, 100], W, [0, 25, 50, 75, 100]);
+    a.paneAxis(sy, [0, 100], "SoC", "%", [0, 25, 50, 75, 100]);
+    g.socBand(sy(d.max_soc), sy(d.min_soc), W);
+    if (future.length) {
+      const f0 = future[0];
+      g.area(future.map((s) => [x(s.t), x(s.t1), sy(s.soc_end_pct)]), sy(0), C.soc, 0.1);
+      g.path([x(f0.t), sy(f0.soc_start_pct), ...future.flatMap((s) => [x(s.t1), sy(s.soc_end_pct)])], C.soc, { width: 2.2 });
+    }
+    g.path(past.filter((r) => r.planned_soc != null).flatMap((r) => [x(r.t1), sy(r.planned_soc)]), C.soc, { width: 1.6, dash: "5 3" });
+    g.path(past.filter((r) => r.actual_soc != null).flatMap((r) => [x(r.t1), sy(r.actual_soc)]), C.actual, { width: 2.2 });
 
-    const bottom = cY + cH + 18;
-    g.timeAxis(x, t0, tEnd, bottom, cY + cH, pxPerHour);
+    // Price pane: context for every decision.
+    const pY = sY + sH + 40, pH = 80;
+    const priceRows = [...past.filter((r) => r.import_price != null), ...future];
+    const prices = priceRows.flatMap((r) => [r.import_price * 100, (r.export_price ?? r.import_price) * 100]);
+    const [pMin, pMax] = niceRange(Math.min(0, ...prices), Math.max(1, ...prices));
+    const py = (v) => pY + pH - ((v - pMin) / (pMax - pMin)) * pH;
+    g.paneGrid(py, [pMin, pMax], W);
+    a.paneAxis(py, [pMin, pMax], "Price", "ct/kWh");
+    g.area(priceRows.map((r) => [x(r.t), x(r.t) + wOf(r), py(Math.max(0, r.import_price * 100))]), py(0), C.price, 0.22);
+    for (const r of priceRows) if (r.import_price < 0) g.rect(x(r.t), py(0), wOf(r), py(r.import_price * 100) - py(0), C.neg, 0.45);
+    g.path(priceRows.flatMap((r) => [x(r.t), py(r.import_price * 100), x(r.t) + wOf(r), py(r.import_price * 100)]), C.price, { width: 1.6 });
+
+    // Forecast pane: PV and load (future only).
+    const fY = pY + pH + 40, fH = 80;
+    const [fMin, fMax] = niceRange(0, Math.max(0.5, ...future.flatMap((s) => [s.pv_kw, s.load_kw])));
+    const fy = (v) => fY + fH - ((v - fMin) / (fMax - fMin)) * fH;
+    g.paneGrid(fy, [fMin, fMax], W);
+    a.paneAxis(fy, [fMin, fMax], "PV/load", "kW");
+    g.area(future.map((s) => [x(s.t), x(s.t1), fy(s.pv_kw)]), fy(0), C.pv, 0.35);
+    g.path(stepLine(future, "load_kw", x, fy), C.load, { width: 1.8 });
+
+    const bottom = fY + fH + 18;
+    g.timeAxis(x, t0, tEnd, bottom, fY + fH, pxPerHour);
+    g.nowLine(nowX, 20, fY + fH);
     g.height = a.height = bottom + 4;
     this._hoverGeom = { x };
-    const legend = legendHtml([
-      ...Object.values(KINDS).map((k) => [k.color, k.label]),
-      [C.soc, "Planned", "dash"],
-      [C.actual, "Actual", "line"],
-    ]);
-    return this._chart(g, a, legend);
+
+    const key = `<div class="key"><b>Bars / blue</b> = plan · <b class="act">red line</b> = what actually happened (left of now)</div>`;
+    return this._chart(
+      g,
+      a,
+      key +
+        legendHtml([
+          ...Object.values(KINDS).map((k) => [k.color, k.label]),
+          [C.actual, "Actual", "line"],
+          [C.grid, "Grid plan", "dash"],
+          [C.soc, "SoC plan", "line"],
+          [C.price, "Import price", "line"],
+          [C.pv, "PV forecast"],
+          [C.load, "Load forecast", "line"],
+        ]),
+    );
   }
 
-// ---------------------------------------------------------- summary view
+  // ---------------------------------------------------------- summary view
   _summaryView(d) {
     this._hoverRows = null;
     const plan = d.plan;
@@ -597,6 +576,11 @@ class Svg {
   }
 }
 
+/** Step-line coordinates for rows with t/t1 and a numeric field. */
+function stepLine(rows, key, x, yf) {
+  return rows.filter((r) => r[key] != null).flatMap((r) => [x(r.t), yf(r[key]), x(r.t1), yf(r[key])]);
+}
+
 function niceTicks(min, max, n) {
   const span = max - min;
   if (span <= 0) return [min];
@@ -636,6 +620,7 @@ const STYLE = `
   .chart .lbl.day { font-weight: 600; fill: var(--primary-text-color); }
   .chart .pane { font-size: 10.5px; font-weight: 600; fill: var(--primary-text-color); }
   .chart .hint { font-size: 10px; fill: var(--secondary-text-color); opacity: .8; }
+  .chart .era { font-size: 11px; font-weight: 600; fill: var(--primary-color); }
   .chart .bandlbl { font-size: 11px; font-weight: 600; fill: #fff; paint-order: stroke; stroke: rgba(0,0,0,.25); stroke-width: 2px; }
   .chart .grid { stroke: var(--divider-color); stroke-width: .7; }
   .chart .grid.zero { stroke: var(--secondary-text-color); stroke-width: 1; }
@@ -646,6 +631,13 @@ const STYLE = `
   .chart .past { fill: var(--secondary-text-color); fill-opacity: .07; }
   .chart .now { stroke: var(--primary-color); stroke-width: 2; stroke-dasharray: 4 3; }
   .chart .cursor { fill: var(--primary-text-color); fill-opacity: .1; }
+  .key { flex-basis: 100%; font-size: 1.03em; color: var(--primary-text-color); }
+  .key .act { color: var(--ec-actual, #d6455d); }
+  .tip .muted, .tip .muted * { color: var(--secondary-text-color); font-weight: 400; }
+  .tip table.cmp { border-collapse: collapse; margin: 2px 0; }
+  .tip table.cmp th { font-weight: 500; color: var(--secondary-text-color); text-align: right; padding: 0 0 0 10px; }
+  .tip table.cmp td { text-align: right; padding: 0 0 0 10px; }
+  .tip table.cmp td:first-child { text-align: left; padding-left: 0; color: var(--secondary-text-color); }
   .legend { display:flex; flex-wrap:wrap; gap:4px 14px; font-size:.8em; color: var(--secondary-text-color); margin-top:6px; padding-left: ${AXIS_W}px; }
   .legend i, .tip i { display:inline-block; width:12px; height:10px; border-radius:2px; margin-right:5px; vertical-align:-1px; background: var(--c); }
   .legend i.dash, .legend i.line { height: 0; border-top: 2px dashed var(--c); background: none; vertical-align: 3px; }
