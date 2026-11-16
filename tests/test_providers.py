@@ -154,3 +154,76 @@ def test_pv_parsers_skip_non_numeric_values():
     assert [i.kwh for i in parse_pv_attributes(solcast)] == [0.5]
     wh = {"wh_period": {"2026-11-15T10:00:00+00:00": "n/a", "2026-11-15T11:00:00+00:00": 500}}
     assert [i.kwh for i in parse_pv_attributes(wh)] == [0.5]
+
+
+@pytest.mark.parametrize("value", ["nan", "inf", "-inf", float("nan"), float("inf")])
+def test_nonfinite_prices_and_pv_are_rejected(value):
+    assert parse_price_attributes({"outlook_quarters": {"start": "2026-11-15T00:00:00Z", "prices": [value]}}) == []
+    assert parse_pv_attributes({"forecast": [{"start": "2026-11-15T00:00:00Z", "value": value}]}) == []
+
+
+@pytest.mark.parametrize("minutes", [-1, 0, "nan", "bad", 0.5, 2000])
+def test_invalid_quarter_duration_is_rejected(minutes):
+    assert (
+        parse_price_attributes(
+            {
+                "outlook_quarters": {
+                    "start": "2026-11-15T00:00:00Z",
+                    "prices": [0.3],
+                    "minutes": minutes,
+                }
+            }
+        )
+        == []
+    )
+
+
+@pytest.mark.parametrize("unit", ["USD/kWh", "SEK/MWh", "EUR", "W", "EUR/Wh"])
+def test_unknown_price_currency_or_unit_requires_explicit_conversion(unit):
+    with pytest.raises(ValueError, match="Unsupported price"):
+        parse_price_attributes({"prices": []}, unit)
+
+
+def test_unknown_all_in_export_never_assumes_import_is_spot():
+    from custom_components.energy_control.providers.prices import PricePoint
+
+    p = PricePoint(datetime(2027, 1, 1, tzinfo=AMS), 60, 0.3)
+    model = PriceModel(netting_end=date(2027, 1, 1))
+    assert model.export_price(p, date(2026, 12, 31)) == 0.3
+    assert model.export_price(p, date(2027, 1, 1)) is None
+    assert PriceModel(export_mode=ExportMode.SPOT).export_price(p, date(2026, 11, 15)) is None
+    assert PriceModel(export_mode=ExportMode.FIXED, export_fixed=0.05).export_price(p, date(2027, 1, 1)) == 0.05
+    assert PriceModel(export_mode=ExportMode.SPOT, includes_taxes=False).export_price(p, date(2027, 1, 1)) == 0.3
+
+
+def test_netting_transition_at_local_midnight_with_negative_raw_spot():
+    from custom_components.energy_control.providers.prices import PricePoint
+
+    start = datetime(2026, 12, 31, 23, 45, tzinfo=AMS)
+    prices = [PricePoint(start, 15, 0.3, -0.05), PricePoint(start + timedelta(minutes=15), 15, 0.3, -0.05)]
+    slots = build_slots(start, prices, [], LoadProfile(AMS), PriceModel(netting_end=date(2027, 1, 1)), AMS)
+    assert slots[0].export_price == 0.3
+    assert slots[1].export_price == -0.05
+
+
+def test_missing_spot_is_explicit_and_disables_price_dependent_battery_export():
+    from custom_components.energy_control.optimizer import GridParams, Strategy, optimize
+    from custom_components.energy_control.providers.prices import PricePoint
+
+    from .test_optimizer import battery
+
+    start = datetime(2027, 1, 1, tzinfo=AMS)
+    prices = [PricePoint(start, 60, 0.9)]
+    slots = build_slots(
+        start, prices, [], LoadProfile(AMS, fallback_kw=0), PriceModel(netting_end=date(2027, 1, 1)), AMS
+    )
+    assert all(not s.export_price_known for s in slots)
+    plan = optimize(
+        slots,
+        battery(80),
+        GridParams(),
+        Strategy(battery_to_grid=True),
+        now=start,
+    )
+    assert not plan.export_prices_complete
+    assert all(s.battery_kw >= 0 for s in plan.slots)

@@ -197,3 +197,28 @@ async def test_replaced_actuator_restore_survives_reload_and_restart(hass, entry
     await restarted.async_apply()
     assert not restarted.pending_restores
     assert ir.async_get(hass).async_get_issue(DOMAIN, f"pending_restores_{entry.entry_id}") is None
+
+
+async def test_export_transition_repair_and_unknown_export_override(hass, entry, setup, freezer):
+    c = entry.runtime_data.coordinator
+    assert ir.async_get(hass).async_get_issue(DOMAIN, f"export_price_{entry.entry_id}") is not None
+    freezer.move_to("2027-01-01T08:01:00+00:00")
+    from .common import set_prices
+
+    set_value(hass, SOC, 50)
+    set_prices(hass)
+    await c.async_refresh()
+    assert not c.data.export_prices_complete
+    assert c.data.as_dict()["savings"] is None
+    assert c.data.as_dict()["slots"][0]["export_price"] is None
+    c.settings["mode"] = Mode.FORCE_DISCHARGE
+    await entry.runtime_data.controller.async_apply()
+    assert entry.runtime_data.controller.status == "fallback_export_price_unknown"
+    assert entry.runtime_data.controller.desired.discharge_limit == 0
+    c.config["export_mode"] = "fixed"
+    c.config["export_fixed"] = 0.05
+    await c.async_refresh()
+    await entry.runtime_data.controller.async_apply()
+    assert c.data.export_prices_complete
+    assert ir.async_get(hass).async_get_issue(DOMAIN, f"export_price_{entry.entry_id}") is None
+    assert entry.runtime_data.controller.desired.action == Action.DISCHARGE_GRID

@@ -92,6 +92,8 @@ class SlotPlan:
         data = asdict(self)
         data["start"] = self.start.isoformat()
         data["action"] = str(self.action)
+        if not self.export_price_known:
+            data["export_price"] = None
         for key, value in data.items():
             if isinstance(value, float):
                 data[key] = round(value, 4)
@@ -137,10 +139,10 @@ class Plan:
             "created": self.created.isoformat(),
             "feasible": self.feasible,
             "export_prices_complete": self.export_prices_complete,
-            "total_cost": round(self.total_cost, 4),
-            "baseline_cost": round(self.baseline_cost, 4),
+            "total_cost": round(self.total_cost, 4) if self.export_prices_complete else None,
+            "baseline_cost": round(self.baseline_cost, 4) if self.export_prices_complete else None,
             "wear_cost": round(self.wear_cost, 4),
-            "savings": round(self.savings, 4),
+            "savings": round(self.savings, 4) if self.export_prices_complete else None,
             "terminal_value": round(self.terminal_value, 4),
             "soc_start_kwh": round(self.soc_start_kwh, 3),
             "soc_end_kwh": round(self.soc_end_kwh, 3),

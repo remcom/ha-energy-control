@@ -275,3 +275,15 @@ def test_grid_export_limit_curtails_pv_and_preserves_strategy():
     assert plan.feasible
     assert plan.slots[0].grid_kw >= -0.1 - 1e-6
     assert plan.slots[0].curtail_kw > 0
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [("hours", 0), ("hours", -0.25), ("import_price", float("nan")), ("load_kwh", float("inf")), ("pv_kwh", -1)],
+)
+def test_invalid_forecast_never_enters_planning(field, value):
+    from dataclasses import replace
+
+    slots = [replace(make_slots([0.3])[0], **{field: value})]
+    with pytest.raises(ValueError, match="Invalid forecast"):
+        optimize(slots, battery(50), GridParams(), Strategy(), now=T0)
