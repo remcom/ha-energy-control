@@ -83,8 +83,7 @@
           "pv": "Zonneverwachting",
           "battery": "Accu",
           "load": "Verbruik & net",
-          "control": "Victron ESS aansturing",
-          "save": "Opslaan en sluiten"
+          "control": "Victron ESS aansturing"
         }
       },
       "prices": {

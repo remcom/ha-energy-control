@@ -307,7 +307,7 @@ class EnergyControlOptionsFlow(OptionsFlow):
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Menu."""
-        return self.async_show_menu(step_id="init", menu_options=[*STEPS, "save"])
+        return self.async_show_menu(step_id="init", menu_options=STEPS)
 
     async def _step(self, step: str, user_input: dict[str, Any] | None) -> ConfigFlowResult:
         errors: dict[str, str] = {}
@@ -318,14 +318,12 @@ class EnergyControlOptionsFlow(OptionsFlow):
                 for key in step_schema(step, {}).schema:
                     self.values.pop(str(key), None)
                 self.values.update(user_input)
-                return await self.async_step_init()
+                # Save on submit: a menu-level "save" was easy to miss, and
+                # closing the dialog then silently discarded the edit.
+                return self.async_create_entry(data=self.values)
         return self.async_show_form(
             step_id=step, data_schema=step_schema(step, {**self.values, **(user_input or {})}), errors=errors
         )
-
-    async def async_step_save(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        """Persist."""
-        return self.async_create_entry(data=self.values)
 
     async def async_step_prices(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Prices."""

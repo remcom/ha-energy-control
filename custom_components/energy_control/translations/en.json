@@ -83,8 +83,7 @@
           "pv": "Solar forecast",
           "battery": "Battery",
           "load": "Consumption & grid",
-          "control": "Victron ESS control",
-          "save": "Save and close"
+          "control": "Victron ESS control"
         }
       },
       "prices": {

@@ -54,6 +54,23 @@ async def test_options_clear_survives_next_edit(hass: HomeAssistant) -> None:
     entry.add_to_hass(hass)
     set_prices(hass)
     result = await hass.config_entries.options.async_init(entry.entry_id)
-    result = await hass.config_entries.options.async_configure(result["flow_id"], {"next_step_id": "save"})
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {"next_step_id": "battery"})
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {})
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert CONF_PV_LIMIT_ENTITY not in entry.options
+
+
+async def test_options_step_saves_on_submit(hass: HomeAssistant) -> None:
+    """Submitting one section persists it; no separate save step is needed."""
+    entry = MockConfigEntry(domain=DOMAIN, data={CONF_PRICE_ENTITY: PRICE, CONF_SOC_ENTITY: SOC})
+    entry.add_to_hass(hass)
+    set_prices(hass)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert "save" not in result["menu_options"]
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {"next_step_id": "load"})
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"load_entity": "sensor.house_consumption"}
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options["load_entity"] == "sensor.house_consumption"
+    assert entry.options[CONF_PRICE_ENTITY] == PRICE  # other sections kept
