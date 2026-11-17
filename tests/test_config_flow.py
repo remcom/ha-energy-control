@@ -74,3 +74,26 @@ async def test_options_step_saves_on_submit(hass: HomeAssistant) -> None:
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert entry.options["load_entity"] == "sensor.house_consumption"
     assert entry.options[CONF_PRICE_ENTITY] == PRICE  # other sections kept
+
+
+async def test_native_nordpool_selection(hass: HomeAssistant) -> None:
+    """Core Nord Pool can replace an attribute sensor in the price step."""
+    native = MockConfigEntry(domain="nordpool", data={})
+    native.add_to_hass(hass)
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            "nordpool_entry": native.entry_id,
+            "nordpool_area": "NL",
+        },
+    )
+    assert result["step_id"] == "pv"
+
+
+async def test_native_nordpool_requires_market_area(hass: HomeAssistant) -> None:
+    native = MockConfigEntry(domain="nordpool", data={})
+    native.add_to_hass(hass)
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"nordpool_entry": native.entry_id})
+    assert result["errors"] == {"nordpool_entry": "invalid_nordpool"}

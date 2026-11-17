@@ -24,6 +24,7 @@ from .const import (
     CONF_DISCHARGE_EFF,
     CONF_DISCHARGE_LIMIT_ENTITY,
     CONF_ENERGY_TAX,
+    CONF_EXPORT_ENERGY_ENTITY,
     CONF_EXPORT_FACTOR,
     CONF_EXPORT_FEE,
     CONF_EXPORT_FIXED,
@@ -31,6 +32,7 @@ from .const import (
     CONF_FEED_IN_LIMIT_ENTITY,
     CONF_GRID_POWER_ENTITY,
     CONF_IDLE_SETPOINT_W,
+    CONF_IMPORT_ENERGY_ENTITY,
     CONF_LOAD_DAYS,
     CONF_LOAD_ENTITY,
     CONF_LOAD_FALLBACK_W,
@@ -40,6 +42,8 @@ from .const import (
     CONF_MAX_EXPORT_W,
     CONF_MAX_IMPORT_W,
     CONF_NETTING_END,
+    CONF_NORDPOOL_AREA,
+    CONF_NORDPOOL_ENTRY,
     CONF_PRICE_ENTITY,
     CONF_PRICE_INCLUDES_TAXES,
     CONF_PV_ENTITIES,
@@ -152,7 +156,11 @@ def step_schema(step: str, values: dict[str, Any]) -> vol.Schema:
     if step == "prices":
         return vol.Schema(
             {
-                _req(CONF_PRICE_ENTITY, values): _entity("sensor"),
+                _opt(CONF_PRICE_ENTITY, values): _entity("sensor"),
+                _opt(CONF_NORDPOOL_ENTRY, values): sel.ConfigEntrySelector(
+                    sel.ConfigEntrySelectorConfig(integration="nordpool")
+                ),
+                _opt(CONF_NORDPOOL_AREA, values): sel.TextSelector(),
                 _req(CONF_PRICE_INCLUDES_TAXES, values): sel.BooleanSelector(),
                 _req(CONF_MARKUP, values): _num(-1, 1, "any", "EUR/kWh"),
                 _req(CONF_ENERGY_TAX, values): _num(0, 1, "any", "EUR/kWh"),
@@ -193,6 +201,8 @@ def step_schema(step: str, values: dict[str, Any]) -> vol.Schema:
                 _req(CONF_LOAD_DAYS, values): _num(1, 60, 1, "d"),
                 _req(CONF_LOAD_FALLBACK_W, values): _num(0, 20000, 10, "W"),
                 _opt(CONF_GRID_POWER_ENTITY, values): _entity("sensor"),
+                _opt(CONF_IMPORT_ENERGY_ENTITY, values): _entity("sensor"),
+                _opt(CONF_EXPORT_ENERGY_ENTITY, values): _entity("sensor"),
                 _req(CONF_MAX_IMPORT_W, values): _num(0, 100000, 100, "W"),
                 _req(CONF_MAX_EXPORT_W, values): _num(0, 100000, 100, "W"),
             }
@@ -219,14 +229,24 @@ def validate_step(hass: HomeAssistant, step: str, user_input: dict[str, Any]) ->
     """Return form errors for a step."""
     errors: dict[str, str] = {}
     if step == "prices":
+        if user_input.get(CONF_NORDPOOL_ENTRY):
+            entry = hass.config_entries.async_get_entry(user_input[CONF_NORDPOOL_ENTRY])
+            if entry is None or entry.domain != "nordpool" or not user_input.get(CONF_NORDPOOL_AREA):
+                errors[CONF_NORDPOOL_ENTRY] = "invalid_nordpool"
+            return errors
+        if not user_input.get(CONF_PRICE_ENTITY):
+            return {CONF_PRICE_ENTITY: "entity_not_found"}
         state = hass.states.get(user_input[CONF_PRICE_ENTITY])
         if state is None:
             errors[CONF_PRICE_ENTITY] = "entity_not_found"
         else:
             from .providers.prices import parse_price_attributes
 
-            if not parse_price_attributes(state.attributes):
-                errors[CONF_PRICE_ENTITY] = "no_price_forecast"
+            try:
+                if not parse_price_attributes(state.attributes):
+                    errors[CONF_PRICE_ENTITY] = "no_price_forecast"
+            except ValueError:
+                errors[CONF_PRICE_ENTITY] = "invalid_price_unit"
     return errors
 
 

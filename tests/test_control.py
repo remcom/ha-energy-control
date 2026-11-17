@@ -81,3 +81,12 @@ def test_discharge_limit_is_ac_side():
     )
     d = desired_for(Action.DISCHARGE_GRID, battery_kw=-2.0, grid_kw=-1.5, curtail=False, originals=ORIG, limits=limits)
     assert d.discharge_limit == 1800
+
+
+def test_sub_100w_planned_power_is_not_inflated():
+    d = desired_for(Action.CHARGE_GRID, battery_kw=0.02, grid_kw=0.2, curtail=False, originals=ORIG, limits=LIMITS)
+    assert d.charge_limit == 20
+    d = desired_for(
+        Action.DISCHARGE_GRID, battery_kw=-0.02, grid_kw=-0.02, curtail=False, originals=ORIG, limits=LIMITS
+    )
+    assert d.discharge_limit == 20

@@ -19,12 +19,12 @@ async def async_setup_entry(
 
 
 class ControlActive(EnergyControlEntity, BinarySensorEntity):
-    """True while Energy Control owns the ESS settings."""
+    """True after an ESS command was applied with confirmed ownership."""
 
     @property
     def is_on(self) -> bool:
         """State."""
-        return self.data.controller.active
+        return self.data.controller.controlling
 
     @property
     def extra_state_attributes(self) -> dict:

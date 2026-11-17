@@ -189,7 +189,8 @@ def test_low_load_saved_for_evening_is_hold():
     SELF_CONSUME that lets the ESS cover the load anyway.
     """
     prices = [0.25] * 16 + [0.40] * 16
-    plan = optimize(make_slots(prices, load=0.0625), battery(43), GridParams(), Strategy(), now=T0)
+    # Scarce stored energy: reserve it for the dearer evening.
+    plan = optimize(make_slots(prices, load=0.0625), battery(20), GridParams(), Strategy(), now=T0)
     first = plan.slots[0]
     assert abs(first.battery_kw) < 1e-6
     assert first.grid_kw > 0
@@ -215,3 +216,74 @@ def test_at_minimum_soc_with_import_is_hold():
     prices = [0.30] * 8
     plan = optimize(make_slots(prices, load=0.2), battery(10, min_pct=10), GridParams(), Strategy(), now=T0)
     assert all(s.action == Action.HOLD and s.reason == "battery at minimum SoC" for s in plan.slots)
+
+
+@pytest.mark.parametrize(
+    "prices,pv,load",
+    [
+        ([0.4] * 16 + [0.2] * 16, None, 0.0625),
+        ([0.2] * 16 + [0.4] * 16, [0.01] * 32, 0.0625),
+        ([0.1] * 32, [0.3] * 32, 0.02),
+        ([-0.1] * 8 + [0.8] * 8, [0.8] * 16, 0.13),
+    ],
+)
+def test_continuous_trajectory_conserves_energy_and_money(prices, pv, load):
+    b = battery(43)
+    plan = optimize(make_slots(prices, pv=pv, load=load), b, GridParams(), Strategy(), now=T0)
+    stored = plan.soc_start_kwh
+    for slot in plan.slots:
+        assert slot.soc_start_pct == pytest.approx(stored / b.capacity_kwh * 100)
+        stored += slot.battery_kw * slot.hours
+        assert slot.soc_end_pct == pytest.approx(stored / b.capacity_kwh * 100)
+        assert b.min_soc_kwh - 1e-6 <= stored <= b.max_soc_kwh + 1e-6
+        assert -b.max_discharge_kw - 1e-6 <= slot.battery_kw <= b.max_charge_kw + 1e-6
+        ac_battery = (
+            slot.battery_kw / b.charge_efficiency if slot.battery_kw > 0 else (slot.battery_kw * b.discharge_efficiency)
+        )
+        assert slot.grid_kw == pytest.approx(slot.load_kw + ac_battery - slot.pv_kw + slot.curtail_kw)
+        price = slot.import_price if slot.grid_kw > 0 else slot.export_price
+        assert slot.cost == pytest.approx(slot.grid_kw * slot.hours * price)
+        assert slot.wear_cost == pytest.approx(max(0, -slot.battery_kw * slot.hours) * b.cycle_cost)
+    assert plan.soc_end_kwh == pytest.approx(stored)
+    assert plan.total_cost == pytest.approx(sum(s.cost for s in plan.slots))
+    assert plan.wear_cost == pytest.approx(sum(s.wear_cost for s in plan.slots))
+
+
+def test_grid_assistance_preserved_when_idle_is_infeasible():
+    plan = optimize(make_slots([0.3], load=0.25), battery(50), GridParams(0.1, 0.1), Strategy(), now=T0)
+    assert plan.feasible
+    assert plan.slots[0].battery_kw < 0
+    assert plan.slots[0].grid_kw <= 0.1 + 1e-6
+
+
+def test_unavoidable_overload_is_explicit():
+    plan = optimize(make_slots([0.3], load=0.25), battery(10), GridParams(0.1, 0.1), Strategy(), now=T0)
+    assert not plan.feasible
+    assert plan.slots[0].grid_violation_kw == pytest.approx(0.9)
+    assert "unavoidable" in plan.slots[0].reason
+    assert plan.as_dict()["feasible"] is False
+
+
+def test_grid_export_limit_curtails_pv_and_preserves_strategy():
+    plan = optimize(
+        make_slots([0.3], pv=[2], load=0.0),
+        battery(100),
+        GridParams(0.1, 0.1),
+        Strategy(grid_charge=False, battery_to_grid=False, curtail_negative=False),
+        now=T0,
+    )
+    assert plan.feasible
+    assert plan.slots[0].grid_kw >= -0.1 - 1e-6
+    assert plan.slots[0].curtail_kw > 0
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [("hours", 0), ("hours", -0.25), ("import_price", float("nan")), ("load_kwh", float("inf")), ("pv_kwh", -1)],
+)
+def test_invalid_forecast_never_enters_planning(field, value):
+    from dataclasses import replace
+
+    slots = [replace(make_slots([0.3])[0], **{field: value})]
+    with pytest.raises(ValueError, match="Invalid forecast"):
+        optimize(slots, battery(50), GridParams(), Strategy(), now=T0)

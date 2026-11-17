@@ -12,8 +12,8 @@ AC-coupled PV inverter when export prices go negative.
   and battery→grid export only happen when the spread actually pays.
 - **Strategies (switches)** — grid charging · battery to grid (arbitrage) · curtail PV at negative prices.
 - **Modes** — `off` · `advisory` (plan only, no writes) · `auto` · `self_consumption` · `force_charge` · `force_discharge` · `hold`.
-- **Dynamic prices** — Tibber Prices (15‑min), Nord Pool, ENTSO‑e, EnergyZero and other sensors that
-  expose a price list in their attributes. All‑in or spot prices (+ markup, energy tax, VAT).
+- **Dynamic prices** — native core Nord Pool forecasts, Tibber Prices (15‑min), ENTSO‑e, EnergyZero
+  and other sensors that expose a price list in their attributes. All‑in or spot prices (+ markup, energy tax, VAT).
 - **Export compensation** — netting (NL *saldering*, export = import price) with an end date, after
   which it switches to `spot × factor − fee`; or a fixed price.
 - **Solar forecast** — Solcast (median/P10/P90), Forecast.Solar, Open‑Meteo Solar Forecast.
@@ -25,10 +25,13 @@ AC-coupled PV inverter when export prices go negative.
   inverter seen by the GX as a PV inverter.
 - **Safe by default** — starts in `advisory`. Original settings are saved before taking over and
   restored when switching to `off`/`advisory`, unloading, or stopping Home Assistant. Stale prices
-  or SoC fall back to plain self consumption and raise a repair issue on write failures.
+  or missing/stale SoC pause forced actions. Live SoC limits block the prohibited direction, including
+  during manual modes and overrides. DESS must acknowledge off before control starts; failures appear in Repairs.
 - **Dashboard card** — bundled (no extra install): one timeline with plan vs actual, summary.
 
 ## Install
+
+Requires **Home Assistant 2026.10.4 or newer** (Python 3.14).
 
 1. HACS → ⋮ → *Custom repositories* → add this repository as *Integration*.
 2. Install **Energy Control**, restart Home Assistant.
@@ -38,10 +41,10 @@ AC-coupled PV inverter when export prices go negative.
 
 | Step | What |
 |---|---|
-| Prices | Price sensor with forecast attributes, taxes, export model (netting end date, spot factor/fee, fixed). |
+| Prices | Forecast sensor or core Nord Pool entry + market area, taxes, export model (netting end date, spot factor/fee, fixed). |
 | Solar | One or more forecast sensors (Solcast: select *today*, *tomorrow*, *day 3* sensors). Forecasts of all selected sensors are **added up** (e.g. one per PV array), so don't select two sensors that cover the same array and period. |
 | Battery | SoC sensor, usable capacity, max charge/discharge power, efficiencies, battery power sensor. |
-| Consumption & grid | Household consumption sensor (without battery), grid power sensor (+ = import), grid limits. |
+| Consumption & grid | Household consumption sensor (without battery), grid power sensor (+ = import), optional cumulative import/export meters (Wh or kWh; select both), grid limits. |
 | Victron ESS control | Grid setpoint, charge/inverter/feed-in limits, DESS mode select, PV limiter. Leave the setpoint empty for advisory-only use. |
 
 Everything can be changed later under *Configure*. Runtime tuning is done with entities:
@@ -51,15 +54,74 @@ Reported costs (plan cost, planned vs actual cost) are what you pay for grid ene
 wear is reported separately (`wear_cost` in the plan summary) and subtracted from the savings.
 The arbitrage margin is only a hurdle for the optimizer: it is never part of a reported cost.
 
+### Prices and the netting transition
+
+In Prices, select either a forecast sensor or the core Nord Pool entry and an explicit area such as
+`NL` or `SE3`. Native Nord Pool takes precedence when selected. It requests **EUR**, converts the
+[core action's EUR/MWh response](https://www.home-assistant.io/actions/nordpool.get_prices_for_date/)
+to EUR/kWh, and preserves the raw spot component. Markup, tax and VAT are then added for import.
+Published days are cached; missing tomorrow is retried around 13:00 CET/CEST and every 15 minutes
+thereafter. Missing today retries every five minutes. Cache rollover follows the market date and
+supports hourly and quarter-hour intervals. No manual template forecast is needed.
+
+For sensor sources, EUR/kWh, EUR/MWh and ct/kWh are supported. Explicit other currencies/units are
+rejected; legacy sensors without a unit retain the EUR/kWh convention. NaN/infinity, invalid durations
+and negative PV/load data are rejected. A spot-only source must be configured with “Prices include
+taxes and fees” disabled. An all-in import price is never silently reused as spot export compensation.
+
+Netting ends at local midnight on the configured date (default `2027-01-01`). A missing raw spot
+component raises a warning 60 days before the transition. Configure the actual fixed export contract,
+a source with raw energy prices, or an explicitly spot-only source. Unknown export prices block
+battery export for those intervals; incomplete plan costs and savings are hidden, with
+`export_prices_complete: false` exposed in the API. No supplier-specific tax reversal is assumed.
+
+### Measured cost and forecast quality
+
+History records sampled seconds, coverage, observed import/export energy, and observed costs.
+A separate `extrapolated_cost` is labelled as an estimate. Missing readings and long reporting gaps
+remain unknown. The daily cost sensor is unavailable unless every elapsed closed quarter has at least 98% coverage
+and a known price; the card separately shows partial observed
+cost and coverage. Older history without coverage metadata is retained as an extrapolated estimate.
+
+When both cumulative import/export meters are selected, their deltas take precedence over sampled
+grid power. Counter resets and unavailable meters create missing coverage. Short intervals crossing
+a quarter boundary are allocated proportionally; long gaps are not assigned to a tariff by guessing.
+Without meters, power samples estimate observed energy and can miss fast changes between samples.
+
+Household power and PV measurements are recorded with coverage and forecast errors. After at least
+20 quarters with 95% load coverage in the last 12 hours, the next two forecast hours receive a
+correction bounded to ±20%, fading to zero. Energy-only household sensors still support recorder
+profiles but do not supply instantaneous load-error feedback. Savings remain forecasts, not measured
+savings claims.
+
 ### How actions map to the ESS
 
 | Action | ESS writes |
 |---|---|
-| Self consumption | setpoint = idle setpoint, limits = original |
+| Self consumption | setpoint = idle setpoint; automatic slots cap charge/discharge at planned power; manual self consumption uses original limits within the live SoC window |
 | Hold | max inverter power = 0 (grid covers load); charging blocked only when the plan exports PV on purpose. Used whenever the plan keeps the battery idle while importing: stored energy is worth more later, or the SoC is at the minimum |
 | Charge from grid | setpoint = max import, max charge power = planned charge power |
 | Discharge to grid | setpoint = −max export, max inverter power = planned discharge power |
 | Curtail (negative prices) | max feed‑in = 0, PV limit follows house load (grid import ≈ 50 W) |
+
+Automatic control requires all four ESS numbers: grid setpoint, charge power, inverter power and
+feed-in limit. Missing configuration keeps the setup advisory with a Repairs explanation; an offline
+essential actuator pauses commands. W and kW are supported (legacy unitless number entities use W).
+Unexecutable targets are reported before dispatch instead of silently clamped. Limits are written
+before forced setpoints. A SoC report older than five minutes blocks both battery directions;
+`last_reported` accepts fresh unchanged readings. An optional ISO `source_timestamp` attribute can
+supply the device's report time. The same freshness rule excludes stale measurements from accounting.
+
+At minimum SoC, discharge is blocked; at maximum SoC, charging is blocked. Missing SoC blocks both.
+DESS-off acknowledgement is checked each tick and retried at most every 30 seconds. Re-enabling
+DESS externally pauses new forced commands and neutralizes previously dispatched commands. Originals
+remain persisted until release. Failed restores of replaced actuators have a separate persistent queue,
+keyed by original entity ID and units, with exact outstanding values in Repairs and the dashboard.
+Readback must confirm recovery before the queue clears, including across options reloads and restarts.
+
+The optimizer conserves energy across small flows, SoC, costs and wear. An unavoidable grid import
+violation is shown as `feasible: false`, `grid_violation_kw` per slot, and a Repairs warning. Available
+battery assistance is retained; a configured limit is never silently discarded.
 
 > Victron stores these settings in flash; Energy Control only writes on change (a few writes per hour).
 
@@ -126,5 +188,11 @@ uv venv --python 3.14 .venv && uv pip install --python .venv -r requirements_tes
 .venv/bin/pytest -q
 ```
 
-The optimizer (`optimizer/`) and providers (`providers/`) are pure Python and unit-tested
-without Home Assistant.
+CI runs the full integration suite with the pinned fixture package on the tested minimum
+(2026.10.4). A second job checks every integration module and the pure optimizer, control and parser
+tests on current Home Assistant (2026.11.2). The published fixture package currently pins 2026.10.4
+and cannot load against 2026.11.2; full current-version fixture tests should be enabled when a matching
+package is published. `scripts/check_compatibility.py` verifies module imports independently.
+
+The optimizer, action mapping and attribute parsers are pure Python. Native Nord Pool and live
+telemetry adapters use Home Assistant APIs and have mocked integration tests.

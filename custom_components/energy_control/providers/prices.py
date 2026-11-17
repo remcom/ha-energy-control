@@ -13,6 +13,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
 from enum import StrEnum
+from math import isfinite
 from typing import Any
 
 from .util import parse_dt, to_float
@@ -41,6 +42,14 @@ class PricePoint:
     minutes: int
     price: float  # as published by the source (scaled to EUR/kWh)
     spot: float | None = None  # energy/spot part if the source provides it
+
+    def __post_init__(self) -> None:
+        if (
+            not 0 < self.minutes <= 1440
+            or not isfinite(self.price)
+            or (self.spot is not None and not isfinite(self.spot))
+        ):
+            raise ValueError("Invalid price interval or nonfinite price")
 
     @property
     def end(self) -> datetime:
@@ -76,7 +85,7 @@ class PriceModel:
             return point.price
         return (point.price + self.markup + self.energy_tax) * (1 + self.vat)
 
-    def export_price(self, point: PricePoint, local_date: date) -> float:
+    def export_price(self, point: PricePoint, local_date: date) -> float | None:
         """Export compensation for the interval."""
         mode = self.export_mode
         if mode == ExportMode.NETTING and self.netting_end and local_date >= self.netting_end:
@@ -85,7 +94,9 @@ class PriceModel:
             return self.import_price(point)
         if mode == ExportMode.FIXED:
             return self.export_fixed
-        spot = point.spot if point.spot is not None else point.price
+        spot = point.spot if point.spot is not None else (point.price if not self.includes_taxes else None)
+        if spot is None:
+            return None
         return spot * self.export_factor - self.export_fee
 
 
@@ -94,12 +105,16 @@ def unit_scale(unit: str | None) -> float:
     if not unit:
         return 1.0
     u = unit.lower().replace(" ", "")
-    scale = 1.0
-    if u.startswith(("ct", "c/", "cent", "¢")):
+    prefix, separator, denominator = u.partition("/")
+    if not separator or denominator not in ("kwh", "mwh"):
+        raise ValueError(f"Unsupported price unit: {unit}; use EUR/kWh, EUR/MWh or ct/kWh")
+    if prefix in ("eur", "€"):
+        scale = 1.0
+    elif prefix in ("ct", "c", "cent", "cents", "¢"):
         scale = 0.01
-    if u.endswith("/mwh"):
-        scale /= 1000
-    return scale
+    else:
+        raise ValueError(f"Unsupported price currency: {unit}; convert to EUR explicitly")
+    return scale / 1000 if denominator == "mwh" else scale
 
 
 def _parse_quarters(block: Mapping[str, Any], scale: float) -> list[PricePoint]:
@@ -107,8 +122,13 @@ def _parse_quarters(block: Mapping[str, Any], scale: float) -> list[PricePoint]:
     prices = block.get("prices") or []
     if start is None or not isinstance(prices, list):
         return []
-    minutes = int(block.get("minutes") or 15)
+    duration = to_float(block.get("minutes", 15))
+    if duration is None or not 0 < duration <= 1440 or not duration.is_integer():
+        return []
+    minutes = int(duration)
     spots = block.get("energy") or []
+    if not isinstance(spots, list):
+        spots = []
     points: list[PricePoint] = []
     for i, raw in enumerate(prices):
         value = to_float(raw)
@@ -150,13 +170,16 @@ def _parse_list(items: Iterable[Any], scale: float) -> list[PricePoint]:
         else:
             minutes = 60
         if minutes <= 0 or minutes > 1440:
-            minutes = 60
+            continue
         points.append(PricePoint(start, minutes, value * scale, spot * scale if spot is not None else None))
     return points
 
 
 def parse_price_attributes(attributes: Mapping[str, Any], unit: str | None = None) -> list[PricePoint]:
     """Extract a sorted, de-duplicated price forecast from entity attributes."""
+    currency = attributes.get("currency")
+    if currency is not None and str(currency).upper() not in ("EUR", "€"):
+        raise ValueError(f"Unsupported price currency: {currency}; convert to EUR explicitly")
     scale = unit_scale(unit or attributes.get("unit_of_measurement"))
     points: list[PricePoint] = []
 

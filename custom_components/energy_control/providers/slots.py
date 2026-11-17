@@ -40,13 +40,17 @@ def build_slots(
         point = price_at(prices, start)
         if point is None:
             break  # gap in price data: stop the horizon here
+        end = min(end, point.end)
+        hours = (end - start).total_seconds() / 3600
+        export_price = model.export_price(point, start.astimezone(tz).date())
         if hours > 1e-3:
             slots.append(
                 SlotInput(
                     start=start,
                     hours=hours,
                     import_price=model.import_price(point),
-                    export_price=model.export_price(point, start.astimezone(tz).date()),
+                    export_price=export_price if export_price is not None else 0.0,
+                    export_price_known=export_price is not None,
                     pv_kwh=energy_between(pv, start, end) * pv_scale,
                     load_kwh=load.at(start) * hours,
                 )

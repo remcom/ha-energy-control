@@ -64,5 +64,12 @@ async def setup(hass: HomeAssistant, entry: MockConfigEntry, freezer):
     await hass.async_block_till_done()
     # Mock after setup: loading our own number/select platforms registers the real services.
     number_calls = async_mock_service(hass, "number", "set_value")
-    select_calls = async_mock_service(hass, "select", "select_option")
+    select_calls = []
+
+    async def select(call):
+        select_calls.append(call)
+        state = hass.states.get(call.data["entity_id"])
+        hass.states.async_set(call.data["entity_id"], call.data["option"], state.attributes)
+
+    hass.services.async_register("select", "select_option", select)
     return number_calls, select_calls

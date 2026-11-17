@@ -43,7 +43,7 @@ def build_payload(data: EnergyControlData, history_hours: float) -> dict[str, An
         "title": coordinator.config_entry.title,
         "mode": coordinator.mode.value,
         "status": controller.status,
-        "control_active": controller.active,
+        "control_active": controller.controlling,
         "curtailing": controller.curtailing,
         "last_error": controller.last_error or coordinator.last_plan_error,
         "soc": coordinator.current_soc,
@@ -69,7 +69,10 @@ def build_payload(data: EnergyControlData, history_hours: float) -> dict[str, An
         ),
         "plan": plan.as_dict() if plan else None,
         "history": data.history.since(since),
-        "cost_today": round(data.history.actual_cost_since(dt_util.start_of_local_day()), 3),
+        "cost_today": data.history.actual_cost_since(dt_util.start_of_local_day()),
+        "observed_cost_today": data.history.observed_cost_since(dt_util.start_of_local_day()),
+        "coverage_today": data.history.coverage_since(dt_util.start_of_local_day()),
+        "pending_restores": controller.pending_restores,
         "planned_cost_today": round(data.history.planned_cost_since(dt_util.start_of_local_day()), 3),
     }
 

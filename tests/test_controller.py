@@ -188,16 +188,14 @@ async def test_no_takeover_after_shutdown(hass: HomeAssistant, entry, setup) -> 
 
 
 # --- writers -------------------------------------------------------------------
-async def test_clamped_value_written_once(hass: HomeAssistant, entry, setup) -> None:
-    """A target beyond the entity max is clamped and not rewritten every tick."""
+async def test_out_of_range_target_is_blocked(hass: HomeAssistant, entry, setup) -> None:
+    """An unexecutable target is reported before any actuator is changed."""
     number_calls, _ = setup
     _set(hass, SETPOINT, "0", max=5000)
     await _auto(hass, entry)
-    assert written(number_calls)[SETPOINT] == 5000
-    accept(hass, number_calls)
-    number_calls.clear()
-    await entry.runtime_data.controller.async_apply()
-    assert SETPOINT not in written(number_calls)
+    assert not number_calls
+    assert entry.runtime_data.controller.status == "error"
+    assert "outside max" in entry.runtime_data.controller.last_error
 
 
 async def test_kw_entity_written_in_kw(hass: HomeAssistant, entry, setup) -> None:
@@ -219,7 +217,7 @@ async def test_override_respects_min_soc(hass: HomeAssistant, entry, setup) -> N
         DOMAIN, "override", {"action": "discharge_grid", "duration": {"minutes": 30}}, blocking=True
     )
     action, _, status = entry.runtime_data.controller.decide(dt_util.utcnow())
-    assert action == Action.SELF_CONSUME
+    assert action == Action.HOLD
     assert status == "min_soc_reached"
 
 

@@ -95,7 +95,7 @@ async def test_stale_plan_falls_back(hass: HomeAssistant, entry, setup) -> None:
     entry.runtime_data.coordinator.data.created -= timedelta(hours=2)
     action, _, status = controller.decide(dt_util.utcnow())
     assert status == "fallback_stale_plan"
-    assert str(action) == "self_consume"
+    assert str(action) == "hold"
 
 
 async def test_websocket(hass: HomeAssistant, entry, setup, hass_ws_client) -> None:

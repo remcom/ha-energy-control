@@ -7,12 +7,30 @@ on:
 jobs:
   pytest:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        homeassistant: ["2026.10.4", "2026.11.2"]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
       - run: pip install -r requirements_test.txt ruff
-      - run: ruff check .
-      - run: pytest -q
+      # The published fixture package currently pins HA 2026.10.4. Use its
+      # matching release for integration tests; check all imports and pure
+      # behavior on current HA without loading incompatible fixture internals.
+      - if: matrix.homeassistant != '2026.10.4'
+        run: pip install --upgrade homeassistant==${{ matrix.homeassistant }}
+      - run: ruff check custom_components tests scripts
+      - run: python scripts/check_compatibility.py
+      - if: matrix.homeassistant == '2026.10.4'
+        run: pytest -q
+      - if: matrix.homeassistant != '2026.10.4'
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+        run: >-
+          python -c 'import homeassistant; import pytest;
+          raise SystemExit(pytest.main(["-q", "--noconftest", "-p", "pytest_asyncio.plugin", "tests/test_optimizer.py",
+          "tests/test_control.py", "tests/test_providers.py"]))'
       - run: node --check custom_components/energy_control/frontend/energy-control-card.js

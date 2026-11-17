@@ -3,6 +3,7 @@
   "name": "Energy Control",
   "after_dependencies": [
     "frontend",
+    "nordpool",
     "recorder"
   ],
   "codeowners": ["@remcom"],

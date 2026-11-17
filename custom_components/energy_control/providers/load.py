@@ -6,6 +6,7 @@ from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, tzinfo
+from math import isfinite
 
 
 @dataclass(slots=True)
@@ -40,7 +41,7 @@ def build_load_profile(
     counts: dict[tuple[bool, int], int] = defaultdict(int)
     all_values: list[float] = []
     for start, kw in hourly_mean_kw:
-        if kw is None or kw < 0:
+        if kw is None or not isfinite(kw) or kw < 0:
             continue
         local = start.astimezone(tz)
         key = (local.weekday() >= 5 if split_weekend else False, local.hour)

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
 from functools import partial
 from typing import TYPE_CHECKING, Any
@@ -35,6 +35,8 @@ from .const import (
     CONF_MAX_EXPORT_W,
     CONF_MAX_IMPORT_W,
     CONF_NETTING_END,
+    CONF_NORDPOOL_AREA,
+    CONF_NORDPOOL_ENTRY,
     CONF_PRICE_ENTITY,
     CONF_PRICE_INCLUDES_TAXES,
     CONF_PV_ENTITIES,
@@ -59,12 +61,17 @@ from .const import (
 )
 from .optimizer import Action, BatteryParams, GridParams, Plan, Strategy, optimize
 from .providers.load import LoadProfile, build_load_profile
+from .providers.nordpool import NordPoolForecast
 from .providers.prices import ExportMode, PriceModel, PricePoint, parse_price_attributes
 from .providers.slots import build_slots
 from .providers.solar import EnergyInterval, parse_pv_attributes
+from .providers.telemetry import soc_reading
+from .providers.util import to_float
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
+
+    from .history import History
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -85,9 +92,8 @@ def state_float(hass: HomeAssistant, entity_id: str | None) -> float | None:
     state = hass.states.get(entity_id)
     if state is None or state.state in (STATE_UNKNOWN, STATE_UNAVAILABLE, ""):
         return None
-    try:
-        value = float(state.state)
-    except ValueError:
+    value = to_float(state.state)
+    if value is None:
         return None
     unit = str(state.attributes.get("unit_of_measurement") or "")
     if unit == "kW":
@@ -115,11 +121,17 @@ class EnergyControlCoordinator(DataUpdateCoordinator[Plan]):
         self.config: dict[str, Any] = {**DEFAULTS, **(entry.options or entry.data)}
         self.settings: dict[str, Any] = dict(DEFAULT_SETTINGS)
         self._settings_store: Store[dict[str, Any]] = Store(hass, 1, f"{DOMAIN}.{entry.entry_id}.settings")
+        self.history: History | None = None
         self.load_profile: LoadProfile | None = None
         self._load_profile_at: datetime | None = None
         self.override: Override | None = None
         self.prices: list[PricePoint] = []
         self.pv: list[EnergyInterval] = []
+        self.nordpool = (
+            NordPoolForecast(hass, self.config[CONF_NORDPOOL_ENTRY], self.config[CONF_NORDPOOL_AREA])
+            if self.config.get(CONF_NORDPOOL_ENTRY) and self.config.get(CONF_NORDPOOL_AREA)
+            else None
+        )
         self.soc_pct: float | None = None
         self.last_plan_error: str | None = None
 
@@ -134,7 +146,7 @@ class EnergyControlCoordinator(DataUpdateCoordinator[Plan]):
         self.config_entry.async_on_unload(
             async_track_time_change(self.hass, self._on_slot_boundary, minute=[0, 15, 30, 45], second=3)
         )
-        watched = [self.config[CONF_PRICE_ENTITY], *self.config.get(CONF_PV_ENTITIES, [])]
+        watched = [e for e in [self.config.get(CONF_PRICE_ENTITY), *self.config.get(CONF_PV_ENTITIES, [])] if e]
         self.config_entry.async_on_unload(async_track_state_change_event(self.hass, watched, self._on_input_changed))
 
     @callback
@@ -153,8 +165,7 @@ class EnergyControlCoordinator(DataUpdateCoordinator[Plan]):
     @property
     def current_soc(self) -> float | None:
         """Live SoC (%), falling back to the value used for the last plan."""
-        live = state_float(self.hass, self.config.get(CONF_SOC_ENTITY))
-        return live if live is not None else self.soc_pct
+        return soc_reading(self.hass, self.config.get(CONF_SOC_ENTITY))[0]
 
     @property
     def mode(self) -> Mode:
@@ -179,7 +190,7 @@ class EnergyControlCoordinator(DataUpdateCoordinator[Plan]):
         if isinstance(netting_end, str) and netting_end:
             netting_end = date.fromisoformat(netting_end)
         return PriceModel(
-            includes_taxes=bool(c[CONF_PRICE_INCLUDES_TAXES]),
+            includes_taxes=False if self.nordpool else bool(c[CONF_PRICE_INCLUDES_TAXES]),
             markup=float(c[CONF_MARKUP]),
             energy_tax=float(c[CONF_ENERGY_TAX]),
             vat=float(c[CONF_VAT]) / 100,
@@ -226,7 +237,7 @@ class EnergyControlCoordinator(DataUpdateCoordinator[Plan]):
         )
 
     def _read_prices(self) -> list[PricePoint]:
-        state = self.hass.states.get(self.config[CONF_PRICE_ENTITY])
+        state = self.hass.states.get(self.config.get(CONF_PRICE_ENTITY, "sensor.none"))
         if state is None:
             return []
         return parse_price_attributes(state.attributes, state.attributes.get("unit_of_measurement"))
@@ -309,14 +320,18 @@ class EnergyControlCoordinator(DataUpdateCoordinator[Plan]):
         now = dt_util.utcnow()
         tz = dt_util.get_default_time_zone()
 
-        self.prices = self._read_prices()
+        try:
+            self.prices = await self.nordpool.async_prices(now) if self.nordpool else self._read_prices()
+        except ValueError as err:
+            self.last_plan_error = "invalid_price_unit"
+            raise UpdateFailed(str(err)) from err
         if not self.prices:
             self.last_plan_error = "no_prices"
-            raise UpdateFailed(f"No price forecast in {self.config[CONF_PRICE_ENTITY]}")
+            raise UpdateFailed("No usable price forecast from the configured source")
 
-        soc = state_float(self.hass, self.config[CONF_SOC_ENTITY])
+        soc, reason = soc_reading(self.hass, self.config[CONF_SOC_ENTITY], now)
         if soc is None:
-            self.last_plan_error = "no_soc"
+            self.last_plan_error = reason
             raise UpdateFailed(f"SoC unavailable: {self.config[CONF_SOC_ENTITY]}")
         self.soc_pct = soc
 
@@ -336,6 +351,34 @@ class EnergyControlCoordinator(DataUpdateCoordinator[Plan]):
             self.last_plan_error = "no_future_prices"
             raise UpdateFailed("Price forecast does not cover the current time")
 
+        if self.history:
+            correction = self.history.recent_load_factor(now)
+            slots = [
+                replace(
+                    slot,
+                    load_kwh=slot.load_kwh
+                    * (1 + (correction - 1) * max(0, 1 - (slot.start - now).total_seconds() / 7200)),
+                )
+                for slot in slots
+            ]
+        model = self.price_model()
+        missing_spot = model.includes_taxes and any(p.spot is None for p in self.prices)
+        transition_soon = model.netting_end and model.netting_end <= now.astimezone(tz).date() + timedelta(days=60)
+        warn = missing_spot and (
+            model.export_mode == ExportMode.SPOT or (model.export_mode == ExportMode.NETTING and transition_soon)
+        )
+        issue_id = f"export_price_{self.config_entry.entry_id}"
+        if warn:
+            ir.async_create_issue(
+                self.hass,
+                DOMAIN,
+                issue_id,
+                is_fixable=False,
+                severity=ir.IssueSeverity.WARNING,
+                translation_key="export_price_missing",
+            )
+        else:
+            ir.async_delete_issue(self.hass, DOMAIN, issue_id)
         plan = await self.hass.async_add_executor_job(
             partial(
                 optimize,
@@ -346,7 +389,19 @@ class EnergyControlCoordinator(DataUpdateCoordinator[Plan]):
                 now=now,
             )
         )
-        self.last_plan_error = None
+        self.last_plan_error = "infeasible_grid_constraints" if not plan.feasible else None
+        grid_issue = f"grid_constraints_{self.config_entry.entry_id}"
+        if plan.feasible:
+            ir.async_delete_issue(self.hass, DOMAIN, grid_issue)
+        else:
+            ir.async_create_issue(
+                self.hass,
+                DOMAIN,
+                grid_issue,
+                is_fixable=False,
+                severity=ir.IssueSeverity.WARNING,
+                translation_key="grid_constraints",
+            )
         _LOGGER.debug(
             "Planned %d slots, cost %.2f EUR, savings %.2f EUR",
             len(plan.slots),
