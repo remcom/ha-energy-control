@@ -27,7 +27,7 @@ AC-coupled PV inverter when export prices go negative.
   restored when switching to `off`/`advisory`, unloading, or stopping Home Assistant. Stale prices
   or missing/stale SoC pause forced actions. Live SoC limits block the prohibited direction, including
   during manual modes and overrides. DESS must acknowledge off before control starts; failures appear in Repairs.
-- **Dashboard card** — bundled (no extra install): one timeline with plan vs actual, summary.
+- **Dashboard card** — bundled (no extra install): one timeline with plan vs actual, schedule, history and summary.
 
 ## Install
 
@@ -134,16 +134,31 @@ type: custom:energy-control-card
 hours: 36       # plan hours ahead (12/24/36/48 buttons switch it on the card)
 past_hours: 12  # history shown left of "now"
 hour_width: 0   # px per hour: 0 = fit the card; e.g. 48 = wider chart that scrolls sideways
+tab: timeline   # tab to open on: timeline / schedule / history / summary
 ```
 
 **Timeline** is one chart over past and future: left of the “now” line you see what was planned
-for each 15-minute slot next to what actually happened, right of it the plan. Everywhere **bars /
-blue = plan** and **red = actual**. Panes: action, battery power (▲ charge / ▼ discharge), grid
-power (▲ import / ▼ export), SoC, price, PV & load forecast. Hover a slot for details: the reason
-for a planned decision, or a plan-vs-actual table for a past slot. **Summary** lists mode, next
-windows, cost & savings and the current ESS setpoints.
+for each 15-minute slot next to what actually happened, right of it the plan. **Red = actual**
+everywhere. Panes:
 
-The action band splits self consumption by what the battery does: **Battery → house** (battery
+- **Price**: bar height is the import price, bar colour is what the battery does then. ▼ marks the
+  three cheapest and ▲ the three most expensive bars ahead.
+- **Battery**: planned power as solid blocks (▲ charge / ▼ discharge, faded in the past), actual
+  power as a red line, and SoC as a blue line on the right axis (dashed = what was planned).
+- **Grid**: planned (dashed) and actual (red) power, ▲ import / ▼ export.
+- **PV/load** forecast.
+
+Hover or tap the chart: the row above it shows that slot's values (plan next to actual for the
+past, the reason for a planned decision).
+
+**Schedule** lists the plan as blocks: back-to-back slots doing the same thing become one row with
+average battery power, average import price and SoC at start/end (hover a row for the reason).
+**History** shows past hours newest first, plan next to actual for battery, grid, SoC and cost, with
+the cost difference in green (cheaper than planned) or red; narrow cards get a compact layout.
+**Summary** starts with battery, planned savings and today's cost, then groups mode, inverter
+setpoints, upcoming windows, costs and settings.
+
+The colours split self consumption by what the battery does: **Battery → house** (battery
 covers the load), **PV → battery** and **Idle**; **Hold** means the grid covers the house while the
 battery is saved. **−/+** zoom out/in: zoomed in, the chart scrolls sideways while the y-axis stays
 in place. The card takes the full width in a sections dashboard; for even more room put it in a
