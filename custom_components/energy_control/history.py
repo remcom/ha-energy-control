@@ -278,6 +278,34 @@ class History:
             return None
         return sum(a for a, _ in rows) / total
 
+    def forecast_accuracy(self, now: datetime, kind: str, days: int = 7) -> dict[str, Any] | None:
+        """Accuracy of the uncorrected forecast over the last `days`.
+
+        accuracy = 100 x (1 - sum |actual - forecast| / sum actual), energy
+        weighted, so quiet hours do not dominate; bias = actual / forecast.
+        PV only counts daylight quarters that were not curtailed.
+        """
+        pairs = [
+            (r[f"actual_{kind}_kw"], forecast)
+            for r in self.since(now - timedelta(days=days))
+            if r.get(f"{kind}_coverage", 0) >= 0.95
+            and r.get(f"actual_{kind}_kw") is not None
+            and (forecast := _forecast_kw(r, kind)) is not None
+            and not (kind == "pv" and (r.get("curtailed") or max(forecast, r[f"actual_{kind}_kw"]) < 0.05))
+        ]
+        actual = sum(a for a, _ in pairs)
+        forecast = sum(f for _, f in pairs)
+        if len(pairs) < 8 or actual <= 0:
+            return None
+        error = sum(abs(a - f) for a, f in pairs)
+        return {
+            "accuracy": round(max(0.0, 100 * (1 - error / actual)), 1),
+            "bias": round(actual / forecast, 3) if forecast > 0 else None,
+            "quarters": len(pairs),
+            "actual_kwh": round(actual / 4, 2),
+            "forecast_kwh": round(forecast / 4, 2),
+        }
+
     def live_average(self, now: datetime) -> tuple[float | None, float | None]:
         """Average (load kW, PV kW) of the running slot after at least 60 s."""
         acc = self._acc

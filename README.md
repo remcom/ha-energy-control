@@ -178,7 +178,9 @@ in place. The card takes the full width in a sections dashboard; for even more r
 
 Entities for your own cards: `sensor.energy_control_action` (with `reason`), `…_planned_grid_power`,
 `…_planned_battery_power`, `…_target_soc`, `…_next_grid_charge`, `…_next_grid_discharge`,
-`…_plan_cost`, `…_plan_savings`, `…_energy_cost_today`, `sensor.energy_control_plan`
+`…_plan_cost`, `…_plan_savings`, `…_energy_cost_today`, `…_pv_forecast_accuracy` and
+`…_load_forecast_accuracy` (7 days, energy weighted, attributes `bias` = actual/forecast,
+`quarters`, `actual_kwh`, `forecast_kwh`), `sensor.energy_control_plan`
 (attribute `forecast`: compact slot list, not recorded), `binary_sensor.energy_control_control_active`,
 `binary_sensor.energy_control_curtailing_pv`.
 
@@ -207,6 +209,24 @@ series:
 - `energy_control.replan` — recompute now (also refreshes the load profile).
 - `energy_control.override` — run an action (`charge_grid`, `discharge_grid`, `hold`, `self_consume`) for a duration, optional power.
 - `energy_control.clear_override`.
+- `energy_control.cheapest_window` — returns the cheapest time to run an appliance: `duration`,
+  `power` (W), optional `earliest` and `latest_end`, `contiguous: false` to allow spread-out
+  quarters (EV). Uses the plan, so PV that would otherwise be exported counts at the export price.
+  Response: `start`, `end`, `average_price`, `cost`, `energy_kwh`, `price_estimated`, `runs`.
+
+```yaml
+# Example: start the dishwasher in the cheapest 2 h before 07:00
+- action: energy_control.cheapest_window
+  data:
+    duration: "02:00:00"
+    power: 800
+    latest_end: "{{ today_at('07:00') + timedelta(days=1) }}"
+  response_variable: window
+- wait_template: "{{ now() >= as_datetime(window.start) }}"
+- action: switch.turn_on
+  target:
+    entity_id: switch.dishwasher
+```
 
 ## Development
 

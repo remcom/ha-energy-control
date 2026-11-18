@@ -286,6 +286,12 @@
       },
       "plan": {
         "name": "Plan"
+      },
+      "pv_forecast_accuracy": {
+        "name": "Nauwkeurigheid PV-voorspelling (7 dagen)"
+      },
+      "load_forecast_accuracy": {
+        "name": "Nauwkeurigheid verbruiksvoorspelling (7 dagen)"
       }
     }
   },
@@ -331,6 +337,36 @@
           "description": "Energy Control entry (default: all)."
         }
       }
+    },
+    "cheapest_window": {
+      "name": "Goedkoopste tijdvak",
+      "description": "Zoek het goedkoopste moment voor een apparaat (vaatwasser, wasmachine, EV). Gebruikt de planning: zonnestroom die anders wordt teruggeleverd telt tegen de terugleverprijs.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Integratie",
+          "description": "Energy Control-integratie (standaard: de eerste)."
+        },
+        "duration": {
+          "name": "Duur",
+          "description": "Hoe lang het apparaat draait."
+        },
+        "power": {
+          "name": "Vermogen",
+          "description": "Gemiddeld vermogen tijdens het draaien."
+        },
+        "earliest": {
+          "name": "Vroegste start",
+          "description": "Standaard: nu."
+        },
+        "latest_end": {
+          "name": "Klaar om",
+          "description": "Uiterlijke eindtijd (standaard: einde van de bekende prijzen)."
+        },
+        "contiguous": {
+          "name": "In één keer",
+          "description": "Uit: de goedkoopste kwartieren mogen verspreid liggen (EV laden)."
+        }
+      }
     }
   },
   "issues": {
@@ -368,6 +404,12 @@
     },
     "min_soc_above_max": {
       "message": "Minimale SoC ({min_soc}%) mag niet hoger zijn dan maximale SoC ({max_soc}%)."
+    },
+    "no_plan": {
+      "message": "Er is nog geen planning; wacht op de eerste planning of controleer de prijs- en SoC-sensoren."
+    },
+    "no_window": {
+      "message": "Er past geen venster van die lengte tussen de vroegste start en het uiterlijke einde binnen de bekende prijzen."
     }
   }
 }

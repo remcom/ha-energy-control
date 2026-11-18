@@ -513,3 +513,15 @@ async def test_pv_production_is_summed_and_unknown_when_partial(hass: HomeAssist
     assert controller._pv_production() == 2000
     _set(hass, "sensor.pv_dc", STATE_UNAVAILABLE)
     assert controller._pv_production() is None
+
+
+async def test_cheapest_window_service(hass: HomeAssistant, entry, setup) -> None:
+    result = await hass.services.async_call(
+        DOMAIN, "cheapest_window", {"duration": {"hours": 1}, "power": 2000}, blocking=True, return_response=True
+    )
+    assert result["energy_kwh"] == 2.0
+    assert dt_util.parse_datetime(result["start"]) < dt_util.parse_datetime(result["end"])
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call(
+            DOMAIN, "cheapest_window", {"duration": {"hours": 200}}, blocking=True, return_response=True
+        )

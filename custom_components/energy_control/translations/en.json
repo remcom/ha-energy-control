@@ -286,6 +286,12 @@
       },
       "plan": {
         "name": "Plan"
+      },
+      "pv_forecast_accuracy": {
+        "name": "PV forecast accuracy (7 days)"
+      },
+      "load_forecast_accuracy": {
+        "name": "Consumption forecast accuracy (7 days)"
       }
     }
   },
@@ -331,6 +337,36 @@
           "description": "Energy Control entry (default: all)."
         }
       }
+    },
+    "cheapest_window": {
+      "name": "Cheapest window",
+      "description": "Find the cheapest time to run an appliance (dishwasher, washing machine, EV). Uses the plan: PV that would be exported counts at the export price.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Entry",
+          "description": "Energy Control entry (default: the first)."
+        },
+        "duration": {
+          "name": "Duration",
+          "description": "How long the appliance runs."
+        },
+        "power": {
+          "name": "Power",
+          "description": "Average power while running."
+        },
+        "earliest": {
+          "name": "Earliest start",
+          "description": "Default: now."
+        },
+        "latest_end": {
+          "name": "Ready by",
+          "description": "Latest end time (default: end of known prices)."
+        },
+        "contiguous": {
+          "name": "In one go",
+          "description": "Off: the cheapest quarters may be spread out (EV charging)."
+        }
+      }
     }
   },
   "issues": {
@@ -368,6 +404,12 @@
     },
     "min_soc_above_max": {
       "message": "Minimum SoC ({min_soc}%) cannot be above maximum SoC ({max_soc}%)."
+    },
+    "no_plan": {
+      "message": "There is no plan yet; wait for the first plan or check the price and SoC sensors."
+    },
+    "no_window": {
+      "message": "No window of that length fits between the earliest start and the latest end within the known prices."
     }
   }
 }

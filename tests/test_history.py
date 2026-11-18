@@ -166,3 +166,27 @@ async def test_pv_factor_last_hour_skips_curtailed_and_small(hass, freezer):
     assert h.recent_pv_factor(now) == 1.0
     h.records = [row(i, 0.1, 2.0) for i in range(1, 5)]
     assert h.recent_pv_factor(now) == 0.3  # bounded
+
+
+async def test_forecast_accuracy_energy_weighted(hass, freezer):
+    freezer.move_to("2026-11-15T12:00:00+00:00")
+    now = dt_util.utcnow()
+    h = History(hass, "acc")
+    h.records = [
+        {
+            "start": (now - timedelta(minutes=15 * i)).isoformat(),
+            "pv_coverage": 1,
+            "actual_pv_kw": 1.0,
+            "planned_pv_forecast_kw": 1.25 if i % 2 else 0.75,
+            "load_coverage": 1,
+            "actual_load_kw": 0.5,
+            "planned_load_forecast_kw": 0.5,
+        }
+        for i in range(1, 11)
+    ]
+    pv = h.forecast_accuracy(now, "pv")
+    assert pv["accuracy"] == 75.0
+    assert pv["bias"] == 1.0
+    assert h.forecast_accuracy(now, "load")["accuracy"] == 100.0
+    h.records = h.records[:5]
+    assert h.forecast_accuracy(now, "pv") is None  # too few quarters

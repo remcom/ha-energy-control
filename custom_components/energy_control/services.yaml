@@ -39,3 +39,33 @@ clear_override:
       selector:
         config_entry:
           integration: energy_control
+cheapest_window:
+  fields:
+    config_entry_id:
+      selector:
+        config_entry:
+          integration: energy_control
+    duration:
+      required: true
+      default:
+        hours: 2
+      selector:
+        duration:
+    power:
+      default: 1000
+      selector:
+        number:
+          min: 1
+          max: 50000
+          step: 50
+          unit_of_measurement: W
+    earliest:
+      selector:
+        datetime:
+    latest_end:
+      selector:
+        datetime:
+    contiguous:
+      default: true
+      selector:
+        boolean:

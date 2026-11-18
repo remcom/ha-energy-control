@@ -106,6 +106,20 @@ SENSORS: tuple[PlanSensorDescription, ...] = (
         value_fn=lambda d: round(p.savings, 3) if (p := d.coordinator.data) and p.export_prices_complete else None,
     ),
     PlanSensorDescription(
+        key="pv_forecast_accuracy",
+        native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=0,
+        value_fn=lambda d: a["accuracy"] if (a := d.history.forecast_accuracy(dt_util.utcnow(), "pv")) else None,
+    ),
+    PlanSensorDescription(
+        key="load_forecast_accuracy",
+        native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=0,
+        value_fn=lambda d: a["accuracy"] if (a := d.history.forecast_accuracy(dt_util.utcnow(), "load")) else None,
+    ),
+    PlanSensorDescription(
         key="cost_today",
         device_class=SensorDeviceClass.MONETARY,
         native_unit_of_measurement="EUR",
@@ -156,6 +170,10 @@ class PlanValueSensor(EnergyControlEntity, SensorEntity):
                 "coverage": self.data.history.coverage_since(_today_start()),
                 "observed_cost": self.data.history.observed_cost_since(_today_start()),
             }
+        if (key := self.entity_description.key).endswith("_forecast_accuracy"):
+            kind = key.removesuffix("_forecast_accuracy")
+            details = self.data.history.forecast_accuracy(dt_util.utcnow(), kind) or {}
+            return {k: v for k, v in details.items() if k != "accuracy"}
         if self.entity_description.key != "action":
             return None
         slot = _current(self.data)
