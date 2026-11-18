@@ -40,18 +40,18 @@ from ..const import (
     Mode,
 )
 from ..optimizer.model import Plan, SlotInput
-from ..providers.price_forecast import hour_key, linear_fit
+from ..providers.price_forecast import hour_key
 from ..providers.slots import floor_slot
 from ..providers.util import to_float
 from .ev import EvMode, deadline, ev_energy, schedule_ev
 from .heatpump import HeatPumpParams, HpMode, HpSlot, load_with_heat_pump, max_block, schedule_heat_pump
+from .hp_model import HeatPumpModel, fit_heat_pump
 
 if TYPE_CHECKING:
     from ..coordinator import EnergyControlCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-HEATING_BASE_C = 18.0  # heating demand ~ degrees below this
 EV_CHARGE_EFFICIENCY = 0.9
 MODE_KEYWORDS = {
     HpMode.BLOCK: ("evu", "block", "sperr", "lock", "off"),
@@ -88,7 +88,7 @@ class FlexibleLoads:
         self.coordinator = coordinator
         self._store: Store[dict[str, Any]] = Store(hass, 1, f"{DOMAIN}.{coordinator.config_entry.entry_id}.flexible")
         # Heat pump model: power (kW) = a + b * max(0, 18 - T_outdoor)
-        self.hp_model: tuple[float, float] | None = None
+        self.hp_model: HeatPumpModel | None = None
         self.hp_modes: dict[datetime, HpMode] = {}
         self.ev_slots: set[datetime] = set()
         self.hp_mode: HpMode | None = None  # what we last commanded
@@ -156,28 +156,30 @@ class FlexibleLoads:
 
     # --- models --------------------------------------------------------------
     def fit_hp_model(self, hp_kw: list[tuple[datetime, float]], temps: dict[datetime, float]) -> None:
-        """Fit heat pump power against heating degrees from hourly history."""
-        pairs = [
-            (max(0.0, HEATING_BASE_C - temps[hour_key(when)]), kw)
-            for when, kw in hp_kw
-            if hour_key(when) in temps and kw >= 0
-        ]
-        fit = linear_fit(pairs)
-        if fit is not None and fit[1] >= 0:
-            self.hp_model = (max(0.0, fit[0]), fit[1])
-        elif hp_kw:
-            mean = sum(kw for _, kw in hp_kw) / len(hp_kw)
-            self.hp_model = (max(0.0, mean), 0.0)
-        _LOGGER.debug("Heat pump model from %d hours: %s", len(pairs), self.hp_model)
+        """Fit the heat pump's daily level against outdoor temperature, plus its hourly shape."""
+        model = fit_heat_pump(hp_kw, temps, dt_util.get_default_time_zone())
+        if model is not None:
+            self.hp_model = model
+        _LOGGER.debug("Heat pump model: %s (balance %s C)", self.hp_model, self.hp_model and self.hp_model.balance_temp)
 
-    def hp_power(self, temp: float | None) -> float:
-        """Expected heat pump power (kW) in normal operation."""
+    def daily_temperature(self, when: datetime) -> float | None:
+        """Mean outdoor temperature over the 24 h around `when` (thermal mass).
+
+        Uses the hourly forecast where available; falls back to the live reading.
+        """
+        forecast = self.coordinator.price_archive.temperature
+        hour = hour_key(when)
+        values = [forecast[h] for k in range(-12, 12) if (h := hour + timedelta(hours=k)) in forecast]
+        if len(values) >= 12:
+            return sum(values) / len(values)
+        return self.temperature_at(when)
+
+    def hp_power(self, when: datetime) -> float:
+        """Expected heat pump power (kW) in normal operation at `when`."""
         if self.hp_model is None:
             return 0.0
-        a, b = self.hp_model
-        if temp is None:
-            return a
-        return max(0.0, a + b * max(0.0, HEATING_BASE_C - temp))
+        local_hour = when.astimezone(dt_util.get_default_time_zone()).hour
+        return self.hp_model.power(self.daily_temperature(when), local_hour)
 
     def temperature_at(self, when: datetime) -> float | None:
         """Forecast outdoor temperature, else the live reading."""
@@ -193,7 +195,7 @@ class FlexibleLoads:
             return slots
         out = []
         for s in slots:
-            kwh = self.hp_power(self.temperature_at(s.start)) * s.hours
+            kwh = self.hp_power(s.start) * s.hours
             out.append(
                 replace(
                     s,
@@ -210,9 +212,7 @@ class FlexibleLoads:
         self.hp_modes = {}
         self.ev_slots = set()
         if self.hp_configured and self.hp_model is not None and self._hp_enabled():
-            hp_slots = [
-                HpSlot(p, self.hp_power(self.temperature_at(p.start)), self.temperature_at(p.start)) for p in plan.slots
-            ]
+            hp_slots = [HpSlot(p, self.hp_power(p.start), self.temperature_at(p.start)) for p in plan.slots]
             params = self.params()
             modes = schedule_heat_pump(
                 hp_slots,

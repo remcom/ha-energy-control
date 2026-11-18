@@ -629,7 +629,9 @@ async def test_plan_includes_heat_pump_and_ev(hass: HomeAssistant, entry, setup)
     )
     _set(hass, HP_SELECT, "Normal mode", options=HP_OPTIONS)
     _set(hass, "switch.charger", "off")
-    coordinator.flex.hp_model = (0.8, 0.0)
+    from custom_components.energy_control.flexible.hp_model import HeatPumpModel
+
+    coordinator.flex.hp_model = HeatPumpModel(a=0.8, b=0.0)
     await coordinator.async_set_setting("mode", "auto")
     await coordinator.async_set_setting("hp_control", True)
     await coordinator.async_set_setting("ev_energy", 3.0)

@@ -165,3 +165,32 @@ def test_deadline_is_next_occurrence():
     now = datetime(2026, 11, 18, 8, 0, tzinfo=ams)
     assert deadline(now, time(7, 0), ams) == datetime(2026, 11, 19, 7, 0, tzinfo=ams)
     assert deadline(now, time(9, 0), ams) == datetime(2026, 11, 18, 9, 0, tzinfo=ams)
+
+
+# --- heat pump model ------------------------------------------------------------
+def test_heat_pump_model_from_daily_averages():
+    """Real daily means of a heat pump (W) against outdoor temperature (C)."""
+    from zoneinfo import ZoneInfo
+
+    from custom_components.energy_control.flexible.hp_model import fit_heat_pump
+    from custom_components.energy_control.providers.price_forecast import hour_key
+
+    ams = ZoneInfo("Europe/Amsterdam")
+    watts = [266.8, 359.6, 407.9, 467.1, 251.0, 304.0, 492.2, 401.1, 393.6, 405.7, 533.2, 419.7, 250.7, 351.0, 149.7]
+    temps = [6.83, 5.03, 3.81, 2.81, 6.61, 5.89, 2.55, 3.68, 4.22, 4.06, 2.29, 4.24, 6.80, 5.69, 8.89]
+    shape = [1.4] * 8 + [0.6] * 16  # runs harder at night
+    norm = sum(shape) / 24
+    power, temp_map = [], {}
+    for d, (w, t) in enumerate(zip(watts, temps, strict=True)):
+        for h in range(24):
+            when = datetime(2026, 11, 4 + d, h, 0, tzinfo=ams)
+            power.append((when, w / 1000 * shape[h] / norm))
+            temp_map[hour_key(when)] = t
+    model = fit_heat_pump(power, temp_map, ams)
+    assert model.b * 1000 == pytest.approx(54.6, abs=1)
+    assert model.balance_temp == pytest.approx(11.5, abs=0.3)
+    assert model.r2 > 0.95
+    assert model.daily_kw(7.5) == pytest.approx(0.221, abs=0.01)
+    assert model.daily_kw(14.0) == 0.0  # no heating on mild days
+    assert model.power(2.0, 3) > model.power(2.0, 15) * 2  # night hours weigh more
+    assert sum(model.shape.values()) / len(model.shape) == pytest.approx(1.0)

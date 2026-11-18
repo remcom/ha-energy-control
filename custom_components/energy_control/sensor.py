@@ -265,7 +265,13 @@ class HeatPumpSensor(EnergyControlEntity, SensorEntity):
             "blocked_today_h": round(flex.blocked_today_h(now), 2),
             "next_change": nxt[0].isoformat() if nxt else None,
             "next_mode": nxt[1].value if nxt else None,
-            "expected_power_kw": round(flex.hp_power(flex.temperature_at(now)), 3) if flex.hp_model else None,
+            "expected_power_kw": round(flex.hp_power(now), 3) if flex.hp_model else None,
+            "model_w_per_degree": round(flex.hp_model.b * 1000) if flex.hp_model else None,
+            "model_no_heating_above_c": (
+                round(t, 1) if flex.hp_model and (t := flex.hp_model.balance_temp) is not None else None
+            ),
+            "model_days": flex.hp_model.days if flex.hp_model else None,
+            "model_r2": round(flex.hp_model.r2, 2) if flex.hp_model and flex.hp_model.r2 is not None else None,
             "schedule": [{"start": start.isoformat(), "mode": mode.value} for start, mode in planned],
         }
 

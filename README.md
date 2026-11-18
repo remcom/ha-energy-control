@@ -185,9 +185,14 @@ other automations that set the same entity, then turn on **Heat pump control**.
 - Live guards run every 10 s: a block ends immediately when it gets too cold, the house cools
   below the minimum, the block limit is reached or the daily budget is used. Turning control off
   or unloading the integration always returns the heat pump to **Normal**.
-- The heat pump's power is modelled from its power sensor history against outdoor temperature
-  (`kW = a + b × max(0, 18 °C − T)`), using the weather entity's hourly temperature forecast. Its
-  consumption is subtracted from the household load profile so it is not counted twice.
+- The heat pump's power is modelled from its power sensor history:
+  `power = level(daily outdoor temperature) × shape(hour of day)`. The level is a line fitted on
+  *daily* averages (the building's thermal mass smooths hourly temperature swings), and reaches
+  zero at the balance temperature above which no heating is needed. The shape is the learned share
+  of each hour (night setback, hot water). Future temperatures come from the weather entity's
+  hourly forecast, averaged over 24 h. The fit (`model_w_per_degree`, `model_no_heating_above_c`,
+  `model_r2`) is shown on the heat pump sensor. Its consumption is subtracted from the household
+  load profile so it is not counted twice.
 
 `sensor.energy_control_heat_pump_mode` shows the commanded state with `status` (why), the hours
 blocked today, the next planned change and the planned schedule.
