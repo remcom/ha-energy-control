@@ -644,3 +644,22 @@ async def test_plan_includes_heat_pump_and_ev(hass: HomeAssistant, entry, setup)
     assert len(charging) in (3, 4)
     assert sum(s.ev_kw * s.hours for s in charging) >= 3.0 - 1e-6
     assert {s.start for s in charging} == coordinator.flex.ev_slots
+
+
+async def test_plan_has_pv_band_and_payload_extras(hass: HomeAssistant, entry, setup) -> None:
+    import json
+    from pathlib import Path
+
+    from custom_components.energy_control.websocket import build_payload
+
+    attrs = json.loads((Path(__file__).parent / "fixtures" / "solcast_tomorrow.json").read_text())
+    hass.states.async_set("sensor.solcast_pv_forecast_forecast_today", "1.2", attrs)
+    coordinator = entry.runtime_data.coordinator
+    coordinator.config["pv_entities"] = ["sensor.solcast_pv_forecast_forecast_today"]
+    await coordinator.async_refresh()
+    sunny = [s for s in coordinator.data.slots if s.pv_kw > 0.1]
+    assert sunny
+    assert all(s.pv_p10_kw < s.pv_kw < s.pv_p90_kw for s in sunny)
+    payload = build_payload(entry.runtime_data, 12)
+    assert {"corrections", "costs_today", "daily_flows", "entities"} <= payload.keys()
+    assert payload["plan"]["slots"][0]["pv_p10_kw"] is not None or payload["plan"]["slots"][0]["pv_kw"] == 0

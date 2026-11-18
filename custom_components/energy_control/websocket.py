@@ -13,7 +13,17 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.util import dt as dt_util
 
-from .const import CONF_CAPACITY_KWH, CONF_SOC_ENTITY, DOMAIN, SET_MAX_SOC, SET_MIN_SOC, SIGNAL_ENTRY_LOADED
+from .const import (
+    CONF_CAPACITY_KWH,
+    CONF_INDOOR_MIN_TEMP,
+    CONF_INDOOR_TEMP_ENTITY,
+    CONF_OUTDOOR_TEMP_ENTITY,
+    CONF_SOC_ENTITY,
+    DOMAIN,
+    SET_MAX_SOC,
+    SET_MIN_SOC,
+    SIGNAL_ENTRY_LOADED,
+)
 from .data import EnergyControlData
 
 
@@ -79,6 +89,19 @@ def build_payload(data: EnergyControlData, history_hours: float) -> dict[str, An
             "load": data.history.forecast_accuracy(dt_util.utcnow(), "load"),
         },
         "has_heat_pump": coordinator.flex.hp_configured,
+        "corrections": {
+            "load_factor": round(coordinator.corrections.load_factor, 3),
+            "pv_factor": round(coordinator.corrections.pv_factor, 3),
+            "live_load_kw": coordinator.corrections.live_load_kw,
+            "live_pv_kw": coordinator.corrections.live_pv_kw,
+        },
+        "entities": {
+            "indoor_temp": coordinator.config.get(CONF_INDOOR_TEMP_ENTITY),
+            "outdoor_temp": coordinator.config.get(CONF_OUTDOOR_TEMP_ENTITY),
+        },
+        "indoor_min_temp": coordinator.config.get(CONF_INDOOR_MIN_TEMP),
+        "costs_today": data.history.costs_since(dt_util.start_of_local_day()),
+        "daily_flows": data.history.daily_flows(dt_util.utcnow()),
         "has_ev": coordinator.flex.ev_configured,
         "planned_cost_today": round(data.history.planned_cost_since(dt_util.start_of_local_day()), 3),
     }

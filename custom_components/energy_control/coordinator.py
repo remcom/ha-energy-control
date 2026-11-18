@@ -72,10 +72,10 @@ from .optimizer import Action, BatteryParams, GridParams, Plan, Strategy, optimi
 from .price_archive import PriceArchive
 from .providers.load import LoadProfile, build_load_profile
 from .providers.nordpool import NordPoolForecast
-from .providers.price_forecast import PriceEstimator, calibrate_external, spot_relation, with_spot
+from .providers.price_forecast import PriceEstimator, calibrate_external, hour_key, spot_relation, with_spot
 from .providers.prices import ExportMode, PriceModel, PricePoint, parse_price_attributes
 from .providers.slots import Corrections, apply_corrections, build_slots
-from .providers.solar import EnergyInterval, parse_pv_attributes
+from .providers.solar import EnergyInterval, energy_between, parse_pv_attributes, parse_solcast
 from .providers.telemetry import soc_reading
 from .providers.util import to_float
 
@@ -292,6 +292,30 @@ class EnergyControlCoordinator(DataUpdateCoordinator[Plan]):
                     if sibling not in result and self.hass.states.get(sibling) is not None:
                         result.append(sibling)
         return result
+
+    def _read_pv_band(self) -> tuple[list[EnergyInterval], list[EnergyInterval]]:
+        """Solcast's pessimistic (P10) and optimistic (P90) forecasts, if available."""
+        low: list[EnergyInterval] = []
+        high: list[EnergyInterval] = []
+        for entity_id in self.pv_forecast_entities():
+            state = self.hass.states.get(entity_id)
+            if state is not None:
+                low.extend(parse_solcast(state.attributes, "pv_estimate10"))
+                high.extend(parse_solcast(state.attributes, "pv_estimate90"))
+        return low, high
+
+    def _annotate(self, plan: Plan) -> None:
+        """Dashboard extras per slot: PV uncertainty band and wind."""
+        low, high = self._read_pv_band()
+        scale = float(self.config[CONF_PV_SCALE])
+        weather = self.price_archive.weather_map()
+        for slot in plan.slots:
+            end = slot.start + timedelta(hours=slot.hours)
+            if low and high and slot.hours:
+                slot.pv_p10_kw = energy_between(low, slot.start, end) * scale / slot.hours
+                slot.pv_p90_kw = energy_between(high, slot.start, end) * scale / slot.hours
+            w = weather.get(hour_key(slot.start))
+            slot.wind_ms = w.wind_ms if w is not None else None
 
     def _read_pv(self) -> list[EnergyInterval]:
         intervals: list[EnergyInterval] = []
@@ -512,6 +536,7 @@ class EnergyControlCoordinator(DataUpdateCoordinator[Plan]):
         if (adjusted := self.flex.schedule(slots, plan, now)) is not None:
             plan = await self.hass.async_add_executor_job(run, adjusted)
         self.flex.annotate(plan)
+        self._annotate(plan)
         self.last_plan_error = "infeasible_grid_constraints" if not plan.feasible else None
         grid_issue = f"grid_constraints_{self.config_entry.entry_id}"
         if plan.feasible:

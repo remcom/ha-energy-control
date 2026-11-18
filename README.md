@@ -241,26 +241,39 @@ type: custom:energy-control-card
 hours: 36       # plan hours ahead (12/24/36/48 buttons switch it on the card)
 past_hours: 12  # history shown left of "now"
 hour_width: 0   # px per hour: 0 = fit the card; e.g. 48 = wider chart that scrolls sideways
-tab: timeline   # tab to open on: timeline / schedule / history / summary
+tab: timeline   # tab to open on: timeline / usage / money / schedule / history / summary
 ```
 
 **Timeline** is one chart over past and future: left of the “now” line you see what was planned
 for each 15-minute slot next to what actually happened, right of it the plan. **Red = actual**
 everywhere. Panes:
 
+- **Corrections** (chips above the chart): the active PV and load correction factors and live values.
 - **Price**: bar height is the import price, bar colour is what the battery does then. ▼ marks the
-  three cheapest and ▲ the three most expensive bars ahead.
+  three cheapest and ▲ the three most expensive bars ahead. Dotted line = spot (market) price,
+  thin line = wind forecast (right axis), faded bars = estimated prices. Strips below show planned
+  heat pump blocks/comfort and EV charging.
 - **Battery**: planned power as solid blocks (▲ charge / ▼ discharge, faded in the past), actual
   power as a red line, and SoC as a blue line on the right axis (dashed = what was planned).
 - **Grid**: planned (dashed) and actual (red) power, ▲ import / ▼ export.
-- **PV/load** forecast.
+- **PV/load**: corrected PV forecast (filled) with the Solcast P10–P90 band, the uncorrected
+  forecasts dashed, curtailed PV in red, and measured PV and load left of now.
 
 Hover or tap the chart: the row above it shows that slot's values (plan next to actual for the
 past, the reason for a planned decision).
 
+**Usage** stacks base load, heat pump and EV: measured left of now (with the forecast dashed),
+predicted right of it. Heat pump blocks are shaded; outdoor temperature (forecast and measured) and
+indoor temperature with its minimum are on the right axis, so you can see blocking does not cost
+comfort. A table compares predicted (next 24 h) and measured (last 24 h) kWh.
+
+**Money** shows the cumulative cost from midnight: measured, the plan, and without battery, continued
+with the plan ahead; a table gives cost, cost without battery and the saving per day.
+
 **Schedule** lists the plan as blocks: back-to-back slots doing the same thing become one row with
 average battery power, average import price and SoC at start/end (hover a row for the reason).
-**History** shows past hours newest first, plan next to actual for battery, grid, SoC and cost, with
+**History** starts with where the energy went per day (house from PV / battery / grid, PV to
+house / battery / grid, self-sufficiency and self-consumption), then shows past hours newest first, plan next to actual for battery, grid, SoC and cost, with
 the cost difference in green (cheaper than planned) or red; narrow cards get a compact layout.
 **Summary** starts with battery, planned savings and today's cost, then groups mode, inverter
 setpoints, upcoming windows, costs and settings.

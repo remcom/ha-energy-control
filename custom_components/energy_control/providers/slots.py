@@ -59,6 +59,7 @@ def build_slots(
                     pv_forecast_kwh=pv_kwh,
                     load_forecast_kwh=load_kwh,
                     price_estimated=point.estimated,
+                    spot_price=point.spot,
                 )
             )
         start = end

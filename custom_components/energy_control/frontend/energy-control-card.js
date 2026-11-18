@@ -2,7 +2,7 @@
  * Energy Control card — plan timeline, planned vs actual, summary.
  * Dependency-free web component; data via websocket `energy_control/subscribe`.
  */
-const CARD_VERSION = "0.5.0";
+const CARD_VERSION = "0.6.0";
 
 // What the battery does in a slot: the plan action, with self consumption
 // split by direction so "battery covers the house" is visible at a glance.
@@ -19,12 +19,26 @@ const kindOf = (action, batteryKw) => {
   if (batteryKw == null || Math.abs(batteryKw) < 1e-3) return "idle";
   return batteryKw < 0 ? "cover" : "store";
 };
+// Energy flow colours.
+const F = {
+  pv: "var(--ec-pv, #e0a800)",
+  battery: "var(--ec-cover, #f0a94b)",
+  grid: "var(--ec-grid, #8e6cbf)",
+  house: "var(--ec-base, #6b8fc7)",
+};
+// Money view colours.
+const M = {
+  plan: "var(--ec-plan, #3b82f6)",
+  base: "var(--ec-baseline, #9aa0a6)",
+};
 // Usage view colours.
 const U = {
   base: "var(--ec-base, #6b8fc7)",
   hp: "var(--ec-hp, #e07a3f)",
   ev: "var(--ec-ev, #8e6cbf)",
   temp: "var(--ec-temp, #2aa198)",
+  indoor: "var(--ec-indoor, #6d4c41)",
+  block: "var(--ec-hp-block, #d6455d)",
 };
 const C = {
   pv: "var(--ec-pv, #e0a800)",
@@ -33,6 +47,9 @@ const C = {
   soc: "var(--ec-soc, #3b82f6)",
   actual: "var(--ec-actual, #d6455d)",
   price: "var(--ec-price, #9aa0a6)",
+  spot: "var(--ec-spot, #5f6b7a)",
+  wind: "var(--ec-wind, #7aa6c2)",
+  pvActual: "var(--ec-pv-actual, #b07d00)",
   neg: "var(--ec-neg, #d6455d)",
   charge: KINDS.charge_grid.color,
   discharge: KINDS.discharge_grid.color,
@@ -49,7 +66,7 @@ const ct = (eur) => (eur == null ? "–" : `${(eur * 100).toFixed(1)} ct`);
 const eur = (v) => (v == null ? "–" : `€ ${v.toFixed(2)}`);
 const kw = (v) => (v == null ? "–" : `${v.toFixed(2)} kW`);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
-const TABS = ["timeline", "usage", "schedule", "history", "summary"];
+const TABS = ["timeline", "usage", "money", "schedule", "history", "summary"];
 const MINUS = "\u2212";
 /** Number with a real minus sign; `+` only when asked. */
 const numS = (v, d = 1, plus = false) => {
@@ -186,6 +203,7 @@ class EnergyControlCard extends HTMLElement {
     else if (!d) body = `<div class="msg">Loading…</div>`;
     else if (this._tab === "timeline") body = this._timelineView(d);
     else if (this._tab === "usage") body = this._usageView(d);
+    else if (this._tab === "money") body = this._moneyView(d);
     else if (this._tab === "schedule") body = this._scheduleView(d);
     else if (this._tab === "history") body = this._historyView(d);
     else body = this._summaryView(d);
@@ -193,13 +211,14 @@ class EnergyControlCard extends HTMLElement {
     const tabs = [
       ["timeline", "Timeline"],
       ["usage", "Usage"],
+      ["money", "Money"],
       ["schedule", "Schedule"],
       ["history", "History"],
       ["summary", "Summary"],
     ]
       .map(([k, l]) => `<button class="tab ${this._tab === k ? "on" : ""}" data-tab="${k}">${l}</button>`)
       .join("");
-    const controls = ["timeline", "usage"].includes(this._tab) ? this._controls() : "";
+    const controls = ["timeline", "usage", "money"].includes(this._tab) ? this._controls() : "";
 
     this.shadowRoot.innerHTML = `
       <style>${STYLE}</style>
@@ -355,6 +374,16 @@ class EnergyControlCard extends HTMLElement {
       g.vline(x(firstEst.t), pY, pY + pH, "est");
       g.text(x(firstEst.t) + 4, pY + 10, "≈ estimated prices", "era");
     }
+    // Spot (market) price under the all-in price, and wind (drives estimates).
+    g.path(stepLine(future.filter((f) => f.spot_price != null).map((f) => ({ ...f, spot: f.spot_price * 100 })), "spot", x, py), C.spot, { width: 1.2, dash: "2 2" });
+    const windRows = future.filter((f) => f.wind_ms != null);
+    if (windRows.length) {
+      const [wMin, wMax] = [0, Math.max(10, ...windRows.map((f) => f.wind_ms))];
+      const wy = (v) => pY + pH - ((v - wMin) / (wMax - wMin)) * pH;
+      ar.paneAxisRange(wy, [wMin, wMax], "Wind", "m/s", "wind");
+      g.path(stepLine(windRows, "wind_ms", x, wy), C.wind, { width: 1.1 });
+    }
+
     // Cheapest/most expensive markers only on published prices.
     const ahead = bars.filter((r) => !r.past && !r.est).sort((u, v) => u.p - v.p);
     if (ahead.length > 6) {
@@ -416,14 +445,28 @@ class EnergyControlCard extends HTMLElement {
     g.text(x(t0) + 4, gy(gMax) + 12, "▲ import", "hint");
     if (gMin < 0) g.text(x(t0) + 4, gy(gMin) - 4, "▼ export", "hint");
 
-    // Forecast pane: PV and load (future only).
-    const fY = gY + gH + 44, fH = 80;
-    const [fMin, fMax] = niceRange(0, Math.max(0.5, ...future.flatMap((s) => [s.pv_kw, s.load_kw])));
+    // PV/load pane: forecast band (P10-P90), corrected forecast (filled),
+    // uncorrected forecast (dashed) and, left of now, what was measured.
+    const fY = gY + gH + 44, fH = 110;
+    const fVals = [
+      ...future.flatMap((s) => [s.pv_kw, s.load_kw, s.pv_p90_kw ?? 0]),
+      ...past.flatMap((r) => [r.actual_pv_kw ?? 0, r.actual_load_kw ?? 0]),
+    ];
+    const [fMin, fMax] = niceRange(0, Math.max(0.5, ...fVals));
     const fy = (v) => fY + fH - ((v - fMin) / (fMax - fMin)) * fH;
     g.paneGrid(fy, [fMin, fMax], W);
     a.paneAxis(fy, [fMin, fMax], "PV/load", "kW");
-    g.area(future.map((s) => [x(s.t), x(s.t1), fy(s.pv_kw)]), fy(0), C.pv, 0.35);
+    g.band(future.filter((s) => s.pv_p10_kw != null).map((s) => [x(s.t), x(s.t1), fy(s.pv_p90_kw), fy(s.pv_p10_kw)]), C.pv, 0.15);
+    g.area(future.map((s) => [x(s.t), x(s.t1), fy(s.pv_kw)]), fy(0), C.pv, 0.4);
+    // Curtailed PV on top of what is produced.
+    g.band(future.filter((s) => s.curtail_kw > 1e-3).map((s) => [x(s.t), x(s.t1), fy(s.pv_kw + s.curtail_kw), fy(s.pv_kw)]), C.neg, 0.45);
+    for (const r of past.filter((r) => r.curtailed)) g.rect(x(r.t), fY + fH - 3, x(r.t1) - x(r.t), 3, C.neg, 0.8);
+    const differs = (a, b) => a != null && Math.abs(a - b) > 0.02;
+    if (future.some((s) => differs(s.pv_forecast_kw, s.pv_kw))) g.path(stepLine(future, "pv_forecast_kw", x, fy), C.pv, { width: 1.2, dash: "4 3" });
+    if (future.some((s) => differs(s.load_forecast_kw, s.load_kw))) g.path(stepLine(future, "load_forecast_kw", x, fy), C.load, { width: 1.1, dash: "4 3" });
     g.path(stepLine(future, "load_kw", x, fy), C.load, { width: 1.8 });
+    g.path(stepLine(past, "actual_pv_kw", x, fy), C.pvActual, { width: 2 });
+    g.path(stepLine(past, "actual_load_kw", x, fy), C.actual, { width: 1.6 });
 
     const bottom = fY + fH + 18;
     g.timeAxis(x, t0, tEnd, bottom, fY + fH, pxPerHour);
@@ -432,7 +475,7 @@ class EnergyControlCard extends HTMLElement {
     this._hoverGeom = { x };
 
     const key = `<div class="key">Bar height = price, colour = plan · <b class="act">red line</b> = what actually happened · <b class="soc">blue line</b> = SoC (right axis)</div>`;
-    return this._chart(
+    return this._correctionChips(d) + this._chart(
       g,
       a,
       ar,
@@ -442,11 +485,152 @@ class EnergyControlCard extends HTMLElement {
           [C.actual, "Actual", "line"],
           [C.soc, "SoC (dashed = planned)", "line"],
           [C.grid, "Grid plan", "dash"],
-          [C.pv, "PV forecast"],
-          [C.load, "Load forecast", "line"],
+          [C.pv, "PV forecast (band = P10–P90)"],
+          [C.pvActual, "PV measured", "line"],
+          [C.load, "Load forecast (dashed = uncorrected)", "line"],
+          [C.neg, "PV curtailed"],
+          [C.spot, "Spot price", "dash"],
+          [C.wind, "Wind", "line"],
           ["var(--success-color, #2e9e5b)", "▼ cheapest / ▲ dearest", "none"],
         ]),
     );
+  }
+
+  // ------------------------------------------------------------ money view
+  /**
+   * Cumulative cost from midnight: what was measured, what the plan expected,
+   * and what it would have cost without the battery. Ahead: the plan.
+   * Grid energy only; battery wear is not included.
+   */
+  _moneyView(d) {
+    const now = Date.now();
+    const midnight = new Date();
+    midnight.setHours(0, 0, 0, 0);
+    const t0 = midnight.getTime();
+    const SLOT = 15 * 60e3;
+    const past = (d.costs_today ?? [])
+      .map((r) => ({ ...r, t: new Date(r.start).getTime() }))
+      .filter((r) => r.t >= t0 && r.t < now)
+      .map((r) => ({ ...r, t1: r.t + SLOT }));
+    const pastEnd = past.length ? past[past.length - 1].t1 : now;
+    const plan = (d.plan?.slots ?? [])
+      .map((s) => ({ ...s, t: new Date(s.start).getTime() }))
+      .map((s) => ({ ...s, t1: s.t + s.hours * 3600e3 }))
+      .filter((s) => s.t1 > pastEnd);
+    if (!past.length && !plan.length) return `<div class="msg">No cost data yet. It fills in as time passes.</div>`;
+    const baselineOf = (s) => {
+      const net = (s.load_kw - s.pv_kw) * s.hours;
+      return net >= 0 ? net * s.import_price : net * (s.export_price ?? s.import_price);
+    };
+    // Cumulative series [t, value] per line.
+    let actual = 0, planned = 0, base = 0;
+    const lines = { actual: [[t0, 0]], planned: [[t0, 0]], base: [[t0, 0]], projected: [] };
+    const rows = [];
+    for (const r of past) {
+      actual += r.actual ?? 0;
+      planned += r.planned ?? 0;
+      base += r.baseline ?? r.actual ?? 0;
+      lines.actual.push([r.t1, actual]);
+      lines.planned.push([r.t1, planned]);
+      lines.base.push([r.t1, base]);
+      rows.push({ t: r.t, t1: r.t1, slot: r.actual, actual, planned, base, past: true });
+    }
+    lines.projected.push([pastEnd, actual]);
+    let projected = actual;
+    for (const s of plan) {
+      const cost = s.cost ?? 0;
+      projected += cost;
+      planned += cost;
+      base += baselineOf(s);
+      lines.projected.push([s.t1, projected]);
+      lines.planned.push([s.t1, planned]);
+      lines.base.push([s.t1, base]);
+      rows.push({ t: Math.max(s.t, pastEnd), t1: s.t1, slot: cost, actual: projected, planned, base, past: false, est: s.price_estimated });
+    }
+    const tEnd = Math.max(now + 3600e3, Math.min(rows.length ? rows[rows.length - 1].t1 : now, now + this._hours * 3600e3));
+    const { W, x, pxPerHour } = this._frame(t0, tEnd);
+    const g = new Svg(W);
+    const a = new Svg(AXIS_W);
+    const ar = new Svg(AXIS_R);
+    const nowX = x(now);
+    this._nowX = nowX;
+    const vals = Object.values(lines).flatMap((l) => l.map(([, v]) => v));
+    const mY = 44, mH = 260;
+    const [vMin, vMax] = niceRange(Math.min(0, ...vals), Math.max(0.5, ...vals));
+    const my = (v) => mY + mH - ((v - vMin) / (vMax - vMin)) * mH;
+    g.paneGrid(my, [vMin, vMax], W);
+    a.paneAxis(my, [vMin, vMax], "Cost", "€");
+    const pts = (l) => l.flatMap(([t, v]) => [x(t), my(v)]);
+    g.path(pts(lines.base), M.base, { width: 1.8 });
+    g.path(pts(lines.planned), M.plan, { width: 1.6, dash: "5 3" });
+    g.path(pts(lines.actual), C.actual, { width: 2.4 });
+    g.path(pts(lines.projected), C.actual, { width: 1.8, dash: "3 3" });
+    // Midnight markers separate the days.
+    for (let t = t0 + 86400e3; t < tEnd; t += 86400e3) g.vline(x(t), mY, mY + mH, "est");
+    if (nowX > 150) g.text(nowX - 6, 13, "◀ measured", "era", "end");
+    g.text(nowX + 6, 13, "plan ▶", "era");
+    const firstEst = rows.find((r) => r.est);
+    if (firstEst) g.text(x(firstEst.t) + 4, mY + 12, "≈ estimated prices", "era");
+    const bottom = mY + mH + 18;
+    g.timeAxis(x, t0, tEnd, bottom, mY + mH, pxPerHour);
+    g.nowLine(nowX, 20, mY + mH);
+    g.height = a.height = ar.height = bottom + 4;
+    this._hoverGeom = { x };
+    this._hoverRows = rows.map((r) => ({
+      t: r.t,
+      t1: r.t1,
+      html: `<b>${fmtDay(new Date(r.t))} ${fmtTime(new Date(r.t))}</b> <span class="muted">${r.past ? "measured" : "plan"}</span>
+        <span>This quarter <b>${eurS(r.slot)}</b></span>
+        <span>Since midnight <b>${eurS(r.actual)}</b> <span class="muted">plan ${eurS(r.planned)} · without battery ${eurS(r.base)}</span></span>
+        <span>Saved <b>${eurS(r.base - r.actual)}</b></span>`,
+    }));
+    this._readoutDefault = this._hoverRows.find((r) => r.t <= now && now < r.t1)?.html ?? `<span class="muted">Hover the chart for details</span>`;
+
+    // Per day: cost and saving (today = measured so far + plan for the rest).
+    const days = new Map();
+    for (const r of rows) {
+      const day = new Date(r.t);
+      day.setHours(0, 0, 0, 0);
+      const k = day.getTime();
+      const e = days.get(k) ?? { cost: 0, base: 0, est: false, measured: 0 };
+      e.cost += r.slot ?? 0;
+      e.est = e.est || !!r.est;
+      if (r.past) e.measured += r.slot ?? 0;
+      days.set(k, e);
+    }
+    // Baseline per day from the cumulative line.
+    let prevBase = 0;
+    for (const [k, e] of days) {
+      const end = rows.filter((r) => r.t >= k && r.t < k + 86400e3).pop();
+      e.base = (end?.base ?? prevBase) - prevBase;
+      prevBase = end?.base ?? prevBase;
+    }
+    const table = `<div class="tscroll"><table class="dt">
+      <thead><tr><th>Day</th><th class="n">Cost</th><th class="n">Without battery</th><th class="n">Saved</th></tr></thead>
+      <tbody>${[...days.entries()].map(([k, e]) => `<tr><td>${dayLabel(k)}${e.est ? ' <span class="muted">≈</span>' : ""}</td><td class="n">${eurS(e.cost)}</td><td class="n">${eurS(e.base)}</td><td class="n ${e.base - e.cost >= 0 ? "pos" : "neg"}">${eurS(e.base - e.cost)}</td></tr>`).join("")}</tbody>
+    </table></div>
+    <div class="note">Grid energy at your tariff; battery wear not included. Today = measured so far + plan for the rest. ≈ includes estimated prices.</div>`;
+    const legend = legendHtml([
+      [C.actual, "Measured (dashed = plan ahead)", "line"],
+      [M.plan, "Plan", "dash"],
+      [M.base, "Without battery", "line"],
+    ]);
+    return this._chart(g, a, ar, legend) + table;
+  }
+
+  /** What the forecast corrections are doing right now. */
+  _correctionChips(d) {
+    const c = d.corrections;
+    if (!c) return "";
+    const chip = (f, label, why) =>
+      Math.abs(f - 1) >= 0.02 ? `<span class="chip ghost" title="${esc(why)}">${label} ×${f.toFixed(2)}</span>` : "";
+    const chips = [
+      chip(c.pv_factor, "PV", "Measured PV vs forecast over the last hour; fades out over 3 h"),
+      chip(c.load_factor, "Load", "Measured vs forecast consumption over 12 h; fades out over 2 h"),
+      c.live_load_kw != null ? `<span class="chip ghost" title="Average of the running quarter replaces the forecast">live load ${c.live_load_kw.toFixed(2)} kW</span>` : "",
+      c.live_pv_kw != null ? `<span class="chip ghost" title="Average of the running quarter replaces the forecast">live PV ${c.live_pv_kw.toFixed(2)} kW</span>` : "",
+    ].join("");
+    return chips ? `<div class="chips corr">Corrections: ${chips}</div>` : "";
   }
 
   // ------------------------------------------------------------ usage view
@@ -515,14 +699,29 @@ class EnergyControlCard extends HTMLElement {
     g.path(stepLine(past, "planned_load_kw", x, uy), C.load, { width: 1.4, dash: "4 3" });
     g.path(stepLine(past, "total", x, uy), C.actual, { width: 2 });
 
-    // Outdoor temperature (right axis), future only: it drives the heat pump.
+    // Heat pump blocks: shaded across the pane (past = as planned at the time).
+    const blocked = [...past.filter((r) => r.planned_hp_mode === "block"), ...future.filter((s) => s.hp_mode === "block")];
+    g.band(blocked.map((r) => [x(r.t), x(r.t1), uY, uY + uH]), U.block, 0.12);
+
+    // Temperatures (right axis): outdoor forecast ahead, measured outdoor and
+    // indoor behind, and the indoor minimum below which blocking stops.
+    this._loadTemps(d);
+    const inside = (this._temps?.indoor ?? []).filter(([t]) => t >= t0 && t <= now);
+    const outside = (this._temps?.outdoor ?? []).filter(([t]) => t >= t0 && t <= now);
     const temps = future.filter((s) => s.outdoor_c != null);
-    if (temps.length) {
-      const tv = temps.map((s) => s.outdoor_c);
-      const [tMin, tMax] = niceRange(Math.min(...tv) - 1, Math.max(...tv) + 1);
+    const allT = [...temps.map((s) => s.outdoor_c), ...inside.map(([, v]) => v), ...outside.map(([, v]) => v)];
+    if (d.has_heat_pump && d.indoor_min_temp != null && inside.length) allT.push(d.indoor_min_temp);
+    if (allT.length) {
+      const [tMin, tMax] = niceRange(Math.min(...allT) - 1, Math.max(...allT) + 1);
       const ty = (v) => uY + uH - ((v - tMin) / (tMax - tMin)) * uH;
-      ar.paneAxisRange(ty, [tMin, tMax], "Out", "°C", "temp");
+      ar.paneAxisRange(ty, [tMin, tMax], "Temp", "°C", "temp");
       g.path(temps.flatMap((s) => [x(s.t), ty(s.outdoor_c), x(s.t1), ty(s.outdoor_c)]), U.temp, { width: 1.6 });
+      const line = (pts) => pts.flatMap(([t, v], i) => (i ? [x(t), ty(pts[i - 1][1]), x(t), ty(v)] : [x(t), ty(v)])).concat(pts.length ? [x(Math.min(now, tEnd)), ty(pts[pts.length - 1][1])] : []);
+      g.path(line(outside), U.temp, { width: 1.6 });
+      g.path(line(inside), U.indoor, { width: 2 });
+      if (inside.length && d.indoor_min_temp != null) {
+        g.path([x(t0), ty(d.indoor_min_temp), x(tEnd), ty(d.indoor_min_temp)], U.indoor, { width: 1, dash: "2 3" });
+      }
     }
 
     const bottom = uY + uH + 18;
@@ -557,9 +756,35 @@ class EnergyControlCard extends HTMLElement {
       ...(d.has_ev ? [[U.ev, "EV"]] : []),
       [C.actual, "Measured total", "line"],
       [C.load, "Forecast (past)", "dash"],
-      ...(temps.length ? [[U.temp, "Outdoor temperature", "line"]] : []),
+      ...(allT.length ? [[U.temp, "Outdoor temperature", "line"]] : []),
+      ...(this._temps?.indoor?.length ? [[U.indoor, "Indoor (dotted = minimum)", "line"]] : []),
+      ...(d.has_heat_pump ? [[U.block, "Heat pump blocked"]] : []),
     ]);
     return this._chart(g, a, ar, legend) + this._usageTotals(d, past, future, now);
+  }
+
+  /** Indoor/outdoor temperature history from the recorder (every 5 minutes). */
+  async _loadTemps(d) {
+    const ids = [d.entities?.indoor_temp, d.entities?.outdoor_temp].filter(Boolean);
+    if (!ids.length || !this._hass?.callWS) return;
+    if (this._tempsAt && Date.now() - this._tempsAt < 5 * 60e3) return;
+    this._tempsAt = Date.now();
+    try {
+      const res = await this._hass.callWS({
+        type: "history/history_during_period",
+        start_time: new Date(Date.now() - this._pastHours * 3600e3).toISOString(),
+        entity_ids: ids,
+        minimal_response: true,
+        no_attributes: true,
+        significant_changes_only: false,
+      });
+      const pts = (id) =>
+        (res?.[id] ?? []).map((p) => [(p.lu ?? p.lc) * 1000, Number(p.s)]).filter(([t, v]) => isFinite(t) && isFinite(v));
+      this._temps = { indoor: pts(d.entities.indoor_temp), outdoor: pts(d.entities.outdoor_temp) };
+      if (this._tab === "usage") this._render();
+    } catch (err) {
+      // Chart works without temperatures; retry at the next interval.
+    }
   }
 
   /** kWh: predicted next 24 h, measured last 24 h, forecast accuracy. */
@@ -793,7 +1018,60 @@ class EnergyControlCard extends HTMLElement {
 
   // ---------------------------------------------------------- history view
   /** Past hours: plan next to actual. Newest first; narrow cards get a compact layout. */
+  /** Where the energy went per day: house supplied by, PV went to. */
+  _flowsHtml(d) {
+    const days = (d.daily_flows ?? []).filter((f) => f.house_kwh > 0 || f.pv_kwh > 0);
+    if (!days.length) return "";
+    const bar = (parts, total) =>
+      `<div class="fbar">${parts
+        .filter(([v]) => v > 0)
+        .map(([v, c, l]) => `<i style="width:${(100 * v) / total}%;background:${c}" title="${l}: ${v.toFixed(1)} kWh"></i>`)
+        .join("")}</div>`;
+    const pct = (v) => (v == null ? "–" : `${Math.round(v * 100)}%`);
+    const rows = [...days].reverse().map((f) => {
+      const house = bar(
+        [
+          [f.pv_to_house, F.pv, "PV"],
+          [f.battery_to_house, F.battery, "Battery"],
+          [f.grid_to_house, F.grid, "Grid"],
+        ],
+        f.house_kwh || 1,
+      );
+      const pv = bar(
+        [
+          [f.pv_to_house, F.house, "House"],
+          [f.pv_to_battery, F.battery, "Battery"],
+          [f.pv_to_grid, F.grid, "Grid"],
+        ],
+        f.pv_kwh || 1,
+      );
+      const extra = [
+        f.grid_to_battery > 0.05 ? `grid→battery ${f.grid_to_battery.toFixed(1)}` : "",
+        f.battery_to_grid > 0.05 ? `battery→grid ${f.battery_to_grid.toFixed(1)}` : "",
+        f.coverage < 0.9 ? `${Math.round(f.coverage * 100)}% measured` : "",
+      ].filter(Boolean).join(" · ");
+      return `<tr><td>${dayLabel(new Date(f.day + "T12:00:00").getTime())}${extra ? `<div class="muted small">${extra}</div>` : ""}</td>
+        <td class="n">${f.house_kwh.toFixed(1)}<span class="u">kWh</span>${house}</td>
+        <td class="n">${f.pv_kwh.toFixed(1)}<span class="u">kWh</span>${f.pv_kwh > 0 ? pv : ""}</td>
+        <td class="n">${pct(f.self_sufficiency)}</td><td class="n">${pct(f.self_consumption)}</td></tr>`;
+    });
+    return `<div class="tscroll"><table class="dt flows">
+      <thead><tr><th>Day</th><th class="n">House (from PV · battery · grid)</th><th class="n">PV (to house · battery · grid)</th><th class="n">Self-sufficient</th><th class="n">Self-consumed</th></tr></thead>
+      <tbody>${rows.join("")}</tbody></table></div>
+      <div class="legend">${legendHtml([
+        [F.pv, "PV"],
+        [F.battery, "Battery"],
+        [F.grid, "Grid"],
+        [F.house, "House (PV bar)"],
+      ])}</div>
+      <div class="note">From measured power per quarter; PV serves the house first, then the battery; conversion losses not counted.</div>`;
+  }
+
   _historyView(d) {
+    return this._flowsHtml(d) + this._hourlyHistory(d);
+  }
+
+  _hourlyHistory(d) {
     this._hoverRows = null;
     const byHour = new Map();
     for (const r of d.history ?? []) {
@@ -932,6 +1210,21 @@ class Svg {
     d += `L${steps[steps.length - 1][1].toFixed(1)},${y0.toFixed(1)}Z`;
     this.parts.push(`<path d="${d}" fill="${fill}" fill-opacity="${op}" stroke="none"/>`);
   }
+  /** Filled band between two step lines: steps = [x0, x1, yTop, yBottom], one shape per touching run. */
+  band(steps, fill, op) {
+    const runs = [];
+    for (const st of steps) {
+      const run = runs[runs.length - 1];
+      if (run && Math.abs(run[run.length - 1][1] - st[0]) < 1) run.push(st);
+      else runs.push([st]);
+    }
+    for (const run of runs) {
+      let d = `M${run[0][0].toFixed(1)},${run[0][2].toFixed(1)}`;
+      for (const [x0, x1, yTop] of run) d += `L${x0.toFixed(1)},${yTop.toFixed(1)}L${x1.toFixed(1)},${yTop.toFixed(1)}`;
+      for (const [x0, x1, , yBot] of [...run].reverse()) d += `L${x1.toFixed(1)},${yBot.toFixed(1)}L${x0.toFixed(1)},${yBot.toFixed(1)}`;
+      this.parts.push(`<path d="${d}Z" fill="${fill}" fill-opacity="${op}" stroke="none"/>`);
+    }
+  }
   /** Solid step blocks: touching slots with the same colour merge into one shape. */
   blocks(rows, key, colorKey, x, yf, op) {
     let run = null;
@@ -999,7 +1292,9 @@ class Svg {
         continue;
       }
       this.parts.push(`<line x1="${px.toFixed(1)}" x2="${px.toFixed(1)}" y1="0" y2="${gridBottom}" class="vgrid${midnight ? " day" : ""}"/>`);
-      this.text(px, y, midnight ? fmtDay(d) : `${String(d.getHours()).padStart(2, "0")}:00`, midnight ? "lbl day" : "lbl", "middle");
+      // Labels centred on the line; at the very edge, anchor them inward so they are not clipped.
+      const anchor = px < 18 ? "start" : px > this.w - 18 ? "end" : "middle";
+      this.text(px, y, midnight ? fmtDay(d) : `${String(d.getHours()).padStart(2, "0")}:00`, midnight ? "lbl day" : "lbl", anchor);
     }
   }
   vline(px, y0, y1, cls) {
@@ -1071,6 +1366,11 @@ const STYLE = `
   .chart .past { fill: var(--secondary-text-color); fill-opacity: .07; }
   .chart .now { stroke: var(--primary-color); stroke-width: 2; stroke-dasharray: 4 3; }
   .chart .temp { fill: var(--ec-temp, #2aa198); }
+  .chart .wind { fill: var(--ec-wind, #7aa6c2); }
+  .chips.corr { font-size: .8em; color: var(--secondary-text-color); margin: 2px 0 6px; align-items: center; }
+  .fbar { display:flex; height:6px; border-radius:3px; overflow:hidden; margin-top:3px; background: var(--divider-color); min-width: 80px; }
+  .fbar i { display:block; height:100%; }
+  .small { font-size: .8em; }
   table.dt tr.tot td { font-weight: 600; border-top: 1px solid var(--divider-color); }
   .chart .est { stroke: var(--secondary-text-color); stroke-width: 1; stroke-dasharray: 2 3; }
   .chart .cursor { fill: var(--primary-text-color); fill-opacity: .1; }

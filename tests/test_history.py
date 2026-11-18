@@ -190,3 +190,41 @@ async def test_forecast_accuracy_energy_weighted(hass, freezer):
     assert h.forecast_accuracy(now, "load")["accuracy"] == 100.0
     h.records = h.records[:5]
     assert h.forecast_accuracy(now, "pv") is None  # too few quarters
+
+
+def test_energy_flows_split():
+    from custom_components.energy_control.history import energy_flows
+
+    f = energy_flows(load_kw=1.0, pv_kw=3.0, battery_kw=1.5)  # sunny: PV to all
+    assert (f["pv_to_house"], f["pv_to_battery"], f["pv_to_grid"]) == (1.0, 1.5, 0.5)
+    assert f["grid_to_house"] == 0 and f["grid_to_battery"] == 0
+    f = energy_flows(load_kw=1.0, pv_kw=0.0, battery_kw=-3.0)  # selling at the peak
+    assert (f["battery_to_house"], f["battery_to_grid"]) == (1.0, 2.0)
+    f = energy_flows(load_kw=0.5, pv_kw=0.0, battery_kw=2.0)  # grid charging
+    assert (f["grid_to_house"], f["grid_to_battery"]) == (0.5, 2.0)
+
+
+async def test_daily_flows_and_costs(hass, freezer):
+    freezer.move_to("2026-11-15T12:00:00+00:00")
+    now = dt_util.utcnow()
+    h = History(hass, "flows")
+    h.records = [
+        {
+            "start": (now - timedelta(minutes=15 * i)).isoformat(),
+            "actual_load_kw": 1.0,
+            "actual_pv_kw": 2.0,
+            "actual_battery_kw": 0.5,
+            "actual_cost": -0.05,
+            "planned_cost": -0.04,
+            "import_price": 0.30,
+            "export_price": 0.20,
+        }
+        for i in range(1, 5)
+    ]
+    day = h.daily_flows(now)[-1]
+    assert day["house_kwh"] == 1.0 and day["pv_kwh"] == 2.0
+    assert day["pv_to_grid"] == 0.5 and day["self_sufficiency"] == 1.0
+    assert day["self_consumption"] == 0.75
+    costs = h.costs_since(now - timedelta(hours=2))
+    assert costs[0]["baseline"] == pytest.approx(-0.25 * 0.20)
+    assert costs[0]["actual"] == -0.05

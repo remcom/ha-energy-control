@@ -33,6 +33,7 @@ class SlotInput:
     pv_forecast_kwh: float | None = None
     load_forecast_kwh: float | None = None
     price_estimated: bool = False  # price is a prediction, not a published price
+    spot_price: float | None = None  # raw market price part, when the source has it
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,6 +99,10 @@ class SlotPlan:
     ev_kw: float = 0.0  # planned EV charging power
     hp_kw: float = 0.0  # expected heat pump power under the schedule (part of load_kw)
     outdoor_c: float | None = None  # expected outdoor temperature
+    spot_price: float | None = None
+    pv_p10_kw: float | None = None  # pessimistic PV forecast (Solcast P10)
+    pv_p90_kw: float | None = None  # optimistic PV forecast (Solcast P90)
+    wind_ms: float | None = None  # forecast wind speed (drives estimated prices)
 
     def as_dict(self) -> dict[str, Any]:
         """Serialize to JSON-friendly dict."""

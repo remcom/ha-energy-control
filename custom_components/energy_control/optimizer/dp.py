@@ -343,4 +343,5 @@ def _slot_plan(
         pv_forecast_kw=None if slot.pv_forecast_kwh is None else slot.pv_forecast_kwh / hours,
         load_forecast_kw=None if slot.load_forecast_kwh is None else slot.load_forecast_kwh / hours,
         price_estimated=slot.price_estimated,
+        spot_price=slot.spot_price,
     )

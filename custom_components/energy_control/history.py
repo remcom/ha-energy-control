@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from math import isfinite
@@ -322,6 +323,69 @@ class History:
         pv = acc.pv_ws / acc.pv_samples / 1000 if acc.pv_samples >= 60 else None
         return load, pv
 
+    def costs_since(self, start: datetime) -> list[dict[str, Any]]:
+        """Per quarter since `start`: measured, planned and no-battery cost (EUR).
+
+        No-battery cost prices the measured load minus measured PV, so the gap
+        to the measured cost is what the battery (and curtailment) saved.
+        """
+        rows = []
+        for r in self.since(start):
+            actual = r.get("actual_cost")
+            if actual is None:
+                actual = r.get("extrapolated_cost")
+            baseline = None
+            load, pv = r.get("actual_load_kw"), r.get("actual_pv_kw")
+            imp, exp = r.get("import_price"), r.get("export_price")
+            if load is not None and pv is not None and imp is not None:
+                net_kwh = (load - pv) * SLOT_MINUTES / 60
+                if net_kwh >= 0:
+                    baseline = net_kwh * imp
+                elif exp is not None:
+                    baseline = net_kwh * exp
+            rows.append(
+                {
+                    "start": r["start"],
+                    "actual": _round(actual, 5),
+                    "planned": _round(r.get("planned_cost"), 5),
+                    "baseline": _round(baseline, 5),
+                }
+            )
+        return rows
+
+    def daily_flows(self, now: datetime, days: int = 7) -> list[dict[str, Any]]:
+        """Where the energy went, per local day (kWh), from measured quarters."""
+        result: dict[str, dict[str, float]] = {}
+        for r in self.since(dt_util.start_of_local_day(now) - timedelta(days=days - 1)):
+            load, pv, battery = r.get("actual_load_kw"), r.get("actual_pv_kw"), r.get("actual_battery_kw")
+            when = dt_util.parse_datetime(r["start"])
+            if when is None:
+                continue
+            day = dt_util.as_local(when).date().isoformat()
+            acc = result.setdefault(day, defaultdict(float))
+            acc["quarters"] += 1
+            if load is None or pv is None or battery is None:
+                continue
+            acc["measured"] += 1
+            for key, value in energy_flows(load, pv, battery).items():
+                acc[key] += value * SLOT_MINUTES / 60
+        out = []
+        for day, acc in sorted(result.items()):
+            house = acc["pv_to_house"] + acc["battery_to_house"] + acc["grid_to_house"]
+            pv = acc["pv_to_house"] + acc["pv_to_battery"] + acc["pv_to_grid"]
+            out.append(
+                {
+                    "day": day,
+                    **{k: round(v, 2) for k, v in acc.items() if k not in ("quarters", "measured")},
+                    "house_kwh": round(house, 2),
+                    "pv_kwh": round(pv, 2),
+                    "coverage": round(acc["measured"] / 96, 3),
+                    "self_sufficiency": round(1 - acc["grid_to_house"] / house, 3) if house > 0 else None,
+                    "self_consumption": round(1 - acc["pv_to_grid"] / pv, 3) if pv > 0 else None,
+                }
+            )
+        return out
+
     def planned_cost_since(self, start: datetime) -> float:
         """Planned cost (EUR) of closed slots since `start`."""
         return sum(r.get("planned_cost") or 0.0 for r in self.since(start))
@@ -337,6 +401,7 @@ def _planned_snapshot(slot: SlotPlan | None) -> dict[str, Any] | None:
         "load_kw": round(slot.load_kw, 3),
         "pv_kw": round(slot.pv_kw, 3),
         "hp_kw": round(slot.hp_kw, 3),
+        "hp_mode": slot.hp_mode,
         "ev_kw": round(slot.ev_kw, 3),
         "pv_forecast_kw": None if slot.pv_forecast_kw is None else round(slot.pv_forecast_kw, 3),
         "load_forecast_kw": None if slot.load_forecast_kw is None else round(slot.load_forecast_kw, 3),
@@ -345,6 +410,40 @@ def _planned_snapshot(slot: SlotPlan | None) -> dict[str, Any] | None:
         "cost": round(slot.cost / slot.hours * SLOT_MINUTES / 60, 5) if slot.hours else 0.0,
         "import_price": round(slot.import_price, 5),
         "export_price": round(slot.export_price, 5),
+    }
+
+
+FLOW_KEYS = (
+    "pv_to_house",
+    "pv_to_battery",
+    "pv_to_grid",
+    "battery_to_house",
+    "battery_to_grid",
+    "grid_to_house",
+    "grid_to_battery",
+)
+
+
+def energy_flows(load_kw: float, pv_kw: float, battery_kw: float) -> dict[str, float]:
+    """Split measured power into flows (kW), battery + = charging.
+
+    PV serves the house first, then the battery, then the grid. The battery
+    serves the house before exporting. Conversion losses are ignored.
+    """
+    load, pv = max(0.0, load_kw), max(0.0, pv_kw)
+    charge, discharge = max(0.0, battery_kw), max(0.0, -battery_kw)
+    pv_house = min(pv, load)
+    pv_battery = min(pv - pv_house, charge)
+    pv_grid = pv - pv_house - pv_battery
+    battery_house = min(discharge, load - pv_house)
+    return {
+        "pv_to_house": pv_house,
+        "pv_to_battery": pv_battery,
+        "pv_to_grid": pv_grid,
+        "battery_to_house": battery_house,
+        "battery_to_grid": discharge - battery_house,
+        "grid_to_house": load - pv_house - battery_house,
+        "grid_to_battery": charge - pv_battery,
     }
 
 
