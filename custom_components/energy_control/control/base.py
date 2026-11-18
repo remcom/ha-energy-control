@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from ..optimizer.model import Action
 
 UNLIMITED = -1.0  # Victron convention for "no limit"
+# Planned grid power below this counts as "battery balances the house".
+BALANCED_GRID_KW = 0.1
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,7 +63,12 @@ def desired_for(
       by the discharge efficiency.
     - HOLD: inverter limit 0 so the grid covers the load; charging is blocked only
       when the plan deliberately exports PV instead of storing it.
-    - SELF_CONSUME: original ESS behaviour around the idle setpoint.
+    - SELF_CONSUME: original ESS behaviour around the idle setpoint, so the
+      battery absorbs forecast errors (unexpected PV surplus, a load spike).
+      Only a deliberate grid trade in the plan caps one direction: storing
+      part of the surplus while exporting the rest caps charging (and blocks
+      discharge); covering part of the load while importing the rest caps
+      discharge (unexpected surplus may still be stored).
     """
     setpoint = limits.idle_setpoint
     charge = originals.charge_limit
@@ -75,6 +82,12 @@ def desired_for(
         setpoint = -limits.max_export
         ac_w = -battery_kw * 1000 * limits.discharge_efficiency
         discharge = min(limits.max_discharge, max(0.0, ac_w))
+    elif action == Action.SELF_CONSUME and abs(grid_kw) >= BALANCED_GRID_KW:
+        if battery_kw > 1e-3 and grid_kw < 0:
+            charge = min(limits.max_charge, battery_kw * 1000)
+            discharge = 0.0
+        elif battery_kw < -1e-3 and grid_kw > 0:
+            discharge = min(limits.max_discharge, -battery_kw * 1000 * limits.discharge_efficiency)
     elif action == Action.HOLD:
         discharge = 0.0
         if grid_kw < 0 and abs(battery_kw) < 1e-3:

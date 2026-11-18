@@ -130,6 +130,7 @@ DEFAULT_SETTINGS: Final[dict[str, object]] = {
 HORIZON_HOURS: Final = 48
 CONTROL_INTERVAL_S: Final = 10
 STALE_PLAN_MINUTES: Final = 45
+REPLAN_MINUTES: Final = 5  # periodic replan with live SoC
 LOAD_PROFILE_REFRESH_H: Final = 6
 HISTORY_DAYS: Final = 7
 

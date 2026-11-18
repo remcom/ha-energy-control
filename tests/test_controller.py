@@ -13,7 +13,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
-from pytest_homeassistant_custom_component.common import async_mock_service
+from pytest_homeassistant_custom_component.common import async_fire_time_changed, async_mock_service
 
 from custom_components.energy_control.config_flow import victron_suggestions
 from custom_components.energy_control.const import (
@@ -471,5 +471,24 @@ async def test_no_drift_replan_while_planning_fails(hass: HomeAssistant, entry, 
 
     coordinator.last_update_success = True
     controller._record(dt_util.utcnow())
+    await hass.async_block_till_done()
+    assert requests
+
+
+async def test_replans_every_five_minutes(hass: HomeAssistant, entry, setup, freezer) -> None:
+    """Periodic replans also run between quarter-hour boundaries."""
+    coordinator = entry.runtime_data.coordinator
+    requests = []
+
+    async def fake_refresh() -> None:
+        requests.append(dt_util.utcnow())
+
+    coordinator.async_request_refresh = fake_refresh
+    now = dt_util.utcnow()
+    target = now.replace(minute=now.minute - now.minute % 5, second=0, microsecond=0) + timedelta(minutes=5)
+    if target.minute % 15 == 0:
+        target += timedelta(minutes=5)  # make sure this is not a slot boundary
+    freezer.move_to(target + timedelta(seconds=3))
+    async_fire_time_changed(hass, target + timedelta(seconds=3))
     await hass.async_block_till_done()
     assert requests

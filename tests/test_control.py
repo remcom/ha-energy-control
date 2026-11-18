@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from custom_components.energy_control.control.base import Limits, Originals, desired_for
 from custom_components.energy_control.control.pv_limiter import (
     curtail_limit_w,
@@ -17,6 +19,31 @@ ORIG = Originals(charge_limit=-1, discharge_limit=2750, feed_in_limit=-1)
 def test_self_consume_restores_originals():
     d = desired_for(Action.SELF_CONSUME, battery_kw=0.5, grid_kw=0, curtail=False, originals=ORIG, limits=LIMITS)
     assert (d.setpoint, d.charge_limit, d.discharge_limit, d.feed_in_limit) == (30, -1, 2750, -1)
+
+
+def test_self_consume_balanced_plan_leaves_ess_free():
+    # Planned "battery covers load" with ~0 grid: an unexpected PV surplus
+    # must still be stored and a load spike still covered.
+    d = desired_for(Action.SELF_CONSUME, battery_kw=-0.8, grid_kw=0.02, curtail=False, originals=ORIG, limits=LIMITS)
+    assert (d.charge_limit, d.discharge_limit) == (-1, 2750)
+    # Planned "store PV surplus" at 1 kW: a larger real surplus is not capped.
+    d = desired_for(Action.SELF_CONSUME, battery_kw=1.0, grid_kw=0.0, curtail=False, originals=ORIG, limits=LIMITS)
+    assert (d.charge_limit, d.discharge_limit) == (-1, 2750)
+
+
+def test_self_consume_partial_store_caps_charging():
+    # Plan stores 1 kW and deliberately exports 1.5 kW of surplus.
+    d = desired_for(Action.SELF_CONSUME, battery_kw=1.0, grid_kw=-1.5, curtail=False, originals=ORIG, limits=LIMITS)
+    assert (d.charge_limit, d.discharge_limit) == (1000, 0)
+
+
+def test_self_consume_partial_cover_caps_discharge_only():
+    # Plan covers part of the load and imports the rest: discharge capped (AC),
+    # an unexpected surplus may still be stored.
+    limits = replace(LIMITS, discharge_efficiency=0.9)
+    d = desired_for(Action.SELF_CONSUME, battery_kw=-1.0, grid_kw=0.6, curtail=False, originals=ORIG, limits=limits)
+    assert d.charge_limit == -1
+    assert d.discharge_limit == 900
 
 
 def test_charge_grid():

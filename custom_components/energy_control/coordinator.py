@@ -49,6 +49,7 @@ from .const import (
     DOMAIN,
     HORIZON_HOURS,
     LOAD_PROFILE_REFRESH_H,
+    REPLAN_MINUTES,
     SET_ARBITRAGE_MARGIN,
     SET_BATTERY_TO_GRID,
     SET_CURTAIL_NEGATIVE,
@@ -142,9 +143,12 @@ class EnergyControlCoordinator(DataUpdateCoordinator[Plan]):
         if stored:
             self.settings.update({k: v for k, v in stored.items() if k in DEFAULT_SETTINGS})
 
-        # Replan just after each quarter-hour boundary.
+        # Replan every few minutes (aligned so every quarter-hour boundary is
+        # included) to pick up the live SoC after forecast errors.
         self.config_entry.async_on_unload(
-            async_track_time_change(self.hass, self._on_slot_boundary, minute=[0, 15, 30, 45], second=3)
+            async_track_time_change(
+                self.hass, self._on_slot_boundary, minute=list(range(0, 60, REPLAN_MINUTES)), second=3
+            )
         )
         watched = [e for e in [self.config.get(CONF_PRICE_ENTITY), *self.config.get(CONF_PV_ENTITIES, [])] if e]
         self.config_entry.async_on_unload(async_track_state_change_event(self.hass, watched, self._on_input_changed))

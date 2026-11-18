@@ -2,7 +2,7 @@
  * Energy Control card — plan timeline, planned vs actual, summary.
  * Dependency-free web component; data via websocket `energy_control/subscribe`.
  */
-const CARD_VERSION = "0.3.0";
+const CARD_VERSION = "0.3.1";
 
 // What the battery does in a slot: the plan action, with self consumption
 // split by direction so "battery covers the house" is visible at a glance.
@@ -328,8 +328,8 @@ class EnergyControlCard extends HTMLElement {
       ...past.filter((r) => r.import_price != null).map((r) => ({ t: r.t, t1: r.t1, p: r.import_price * 100, kind: r.kind ?? "idle", past: true })),
       ...future.map((s) => ({ t: s.t, t1: s.t1, p: s.import_price * 100, kind: s.kind, past: false })),
     ];
-    // Thin 15-minute bars read as stripes: below ~7 px per slot, show hourly bars.
-    const bars = pxPerHour / 4 >= 7 ? priceRows : hourly(priceRows);
+    // Always the real 15-minute prices; narrow bars are drawn without gaps.
+    const bars = priceRows;
     const ps = bars.map((r) => r.p);
     const [pMin, pMax] = niceRange(Math.min(0, ...ps), Math.max(1, ...ps), 0.12);
     const py = (v) => pY + pH - ((v - pMin) / (pMax - pMin)) * pH;
@@ -343,8 +343,10 @@ class EnergyControlCard extends HTMLElement {
     const ahead = bars.filter((r) => !r.past).sort((u, v) => u.p - v.p);
     if (ahead.length > 6) {
       const mark = (r, cls, sym) => g.text((x(r.t) + x(r.t1)) / 2, Math.min(py(r.p), py(0)) - 3, sym, `mark ${cls}`, "middle");
-      ahead.slice(0, 3).forEach((r) => mark(r, "lo", "▼"));
-      ahead.slice(-3).forEach((r) => mark(r, "hi", "▲"));
+      // Three extremes at least an hour apart, so adjacent quarters do not stack.
+      const spread = (rows) => rows.reduce((out, r) => (out.length < 3 && out.every((o) => Math.abs(o.t - r.t) >= 3600e3) ? [...out, r] : out), []);
+      spread(ahead).forEach((r) => mark(r, "lo", "▼"));
+      spread([...ahead].reverse()).forEach((r) => mark(r, "hi", "▲"));
     }
 
     // Battery pane: planned power as solid blocks (faded in the past), actual
@@ -826,21 +828,6 @@ class Svg {
     const cursor = fixedWidth ? "" : `<rect class="cursor" x="0" y="0" width="1" height="${this.height}" visibility="hidden"/>`;
     return `<svg viewBox="0 0 ${w} ${this.height}" width="${w}" height="${this.height}">${cursor}${this.parts.join("")}</svg>`;
   }
-}
-
-/** Merge 15-minute price rows into hourly bars (average price, most common action). */
-function hourly(rows) {
-  const out = [];
-  for (const r of rows) {
-    const h = Math.floor(r.t / 3600e3);
-    let b = out[out.length - 1];
-    if (!b || b.h !== h || b.past !== r.past) out.push((b = { h, t: r.t, t1: r.t1, past: r.past, sum: 0, n: 0, kinds: {} }));
-    b.t1 = r.t1;
-    b.sum += r.p;
-    b.n += 1;
-    b.kinds[r.kind] = (b.kinds[r.kind] ?? 0) + 1;
-  }
-  return out.map((b) => ({ t: b.t, t1: b.t1, past: b.past, p: b.sum / b.n, kind: Object.entries(b.kinds).sort((u, v) => v[1] - u[1])[0][0] }));
 }
 
 /** Step-line coordinates for rows with t/t1 and a numeric field. */

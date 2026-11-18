@@ -449,12 +449,6 @@ class VictronController:
                 originals=self._originals_obj(),
                 limits=limits,
             )
-            if slot is not None and action == Action.SELF_CONSUME:
-                desired = replace(
-                    desired,
-                    charge_limit=max(0.0, slot.battery_kw * 1000),
-                    discharge_limit=max(0.0, -slot.battery_kw * 1000 * limits.discharge_efficiency),
-                )
             soc, _error = soc_reading(self.hass, self.config.get(CONF_SOC_ENTITY), now)
             minimum = float(self.coordinator.settings[SET_MIN_SOC])
             maximum = float(self.coordinator.settings[SET_MAX_SOC])
