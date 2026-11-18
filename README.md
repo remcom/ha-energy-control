@@ -1,5 +1,13 @@
 # Energy Control
 
+> [!WARNING]
+> **Experimental — in early development. Not recommended for use.**
+> Energy Control directly controls your battery inverter, and optionally your heat pump and EV
+> charger. It is new, changes quickly between releases and has only been tested on a single
+> installation. Bugs can cost money, empty your battery at the wrong moment or leave a device in
+> an unexpected state. Use it only if you understand the risks, start in `advisory` mode, and keep
+> an eye on what it does. No warranty (see [LICENSE](LICENSE)).
+
 A local, cost-optimizing battery scheduler for Home Assistant — a self-hosted alternative to
 Victron VRM Dynamic ESS. Every 5 minutes it plans the next 24–48 h from dynamic prices, solar
 forecast and your own consumption history, executes the plan on a Victron ESS and can curtail an
@@ -7,17 +15,29 @@ AC-coupled PV inverter when export prices go negative.
 
 ## Features
 
-- **Optimizer** — dynamic programming over battery state of charge per 15‑minute slot. Accounts
-  for charge/discharge efficiency, battery wear (€/kWh) and an arbitrage margin, so grid charging
-  and battery→grid export only happen when the spread actually pays.
-- **Strategies (switches)** — grid charging · battery to grid (arbitrage) · curtail PV at negative prices.
+- **Optimizer** — dynamic programming over battery state of charge per 15‑minute slot, replanned
+  every 5 minutes. Accounts for charge/discharge efficiency, battery wear (€/kWh) and an arbitrage
+  margin, so grid charging and battery→grid export only happen when the spread actually pays.
+- **Strategies (switches)** — grid charging · battery to grid (arbitrage) · curtail PV at negative
+  prices · plan with estimated prices · heat pump control.
 - **Modes** — `off` · `advisory` (plan only, no writes) · `auto` · `self_consumption` · `force_charge` · `force_discharge` · `hold`.
 - **Dynamic prices** — native core Nord Pool forecasts, Tibber Prices (15‑min), ENTSO‑e, EnergyZero
   and other sensors that expose a price list in their attributes. All‑in or spot prices (+ markup, energy tax, VAT).
+- **Price estimates** — before tomorrow's prices are published the plan still looks 36 h ahead,
+  using an external forecast sensor or a built-in model (price history, solar and wind). Estimates
+  steer the plan but are never executed.
 - **Export compensation** — netting (NL *saldering*, export = import price) with an end date, after
   which it switches to `spot × factor − fee`; or a fixed price.
-- **Solar forecast** — Solcast (median/P10/P90), Forecast.Solar, Open‑Meteo Solar Forecast.
-- **Load forecast** — hourly profile (weekday/weekend) from recorder statistics of your consumption sensor.
+- **Solar forecast** — Solcast (median/P10/P90, later days added automatically), Forecast.Solar,
+  Open‑Meteo Solar Forecast; corrected for clouds from measured production in the last hour.
+- **Load forecast** — robust hourly profile (weekday/weekend) from recorder statistics, live values
+  for the running quarter, recent-deviation correction; heat pump and EV modelled separately.
+- **Heat pump** — SG Ready / EVU: blocks expensive quarters when the catch-up is cheaper, limited by
+  outdoor temperature; comfort/boost when energy is cheap. Consumption modelled from outdoor
+  temperature and time of day.
+- **EV charging** — cheapest quarters before a ready-by time, or now.
+- **Cheapest window service** — when to run the dishwasher, washing machine or EV.
+- **Forecast accuracy sensors** — PV and consumption, 7 days.
 - **Victron control** — via the core Victron GX integration entities (auto-suggested): grid
   setpoint, max charge power, max inverter power, max feed‑in. VRM Dynamic ESS is switched off
   while Energy Control is in charge and restored afterwards.
@@ -26,8 +46,10 @@ AC-coupled PV inverter when export prices go negative.
 - **Safe by default** — starts in `advisory`. Original settings are saved before taking over and
   restored when switching to `off`/`advisory`, unloading, or stopping Home Assistant. Stale prices
   or missing/stale SoC pause forced actions. Live SoC limits block the prohibited direction, including
-  during manual modes and overrides. DESS must acknowledge off before control starts; failures appear in Repairs.
-- **Dashboard card** — bundled (no extra install): one timeline with plan vs actual, schedule, history and summary.
+  during manual modes and overrides. DESS must acknowledge off before control starts; failures appear
+  in Repairs. The heat pump always returns to normal when control stops.
+- **Dashboard card** — bundled (no extra install): one timeline with plan vs actual (estimated
+  prices faded, heat pump/EV strips), schedule, history and summary.
 
 ## Install
 
@@ -185,6 +207,10 @@ other automations that set the same entity, then turn on **Heat pump control**.
 - Live guards run every 10 s: a block ends immediately when it gets too cold, the house cools
   below the minimum, the block limit is reached or the daily budget is used. Turning control off
   or unloading the integration always returns the heat pump to **Normal**.
+- The heat pump's power is refitted every 6 hours (and on `energy_control.replan`) from the last
+  *load days* (default 14) of history, so it follows changes in heating curve, setpoints or season
+  within one to two weeks. Temperatures colder than any day in that window are extrapolated
+  linearly and may be underestimated (heat pump efficiency drops in the cold).
 - The heat pump's power is modelled from its power sensor history:
   `power = level(daily outdoor temperature) × shape(hour of day)`. The level is a line fitted on
   *daily* averages (the building's thermal mass smooths hourly temperature swings), and reaches
