@@ -31,6 +31,10 @@ async def test_full_flow(hass: HomeAssistant) -> None:
     result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
     assert result["step_id"] == "control"
     result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    assert result["step_id"] == "heat_pump"
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    assert result["step_id"] == "ev"
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["data"]["price_entity"] == PRICE
     assert result["data"]["capacity_kwh"] == 14.3
@@ -97,3 +101,17 @@ async def test_native_nordpool_requires_market_area(hass: HomeAssistant) -> None
     result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
     result = await hass.config_entries.flow.async_configure(result["flow_id"], {"nordpool_entry": native.entry_id})
     assert result["errors"] == {"nordpool_entry": "invalid_nordpool"}
+
+
+async def test_heat_pump_select_needs_sg_ready_options(hass: HomeAssistant) -> None:
+    hass.states.async_set("select.hp", "Normal mode", {"options": ["Normal mode", "EVU mode", "Comfort mode"]})
+    hass.states.async_set("select.other", "a", {"options": ["a", "b"]})
+    from custom_components.energy_control.config_flow import validate_step
+
+    assert validate_step(hass, "heat_pump", {"hp_control_entity": "select.hp"}) == {}
+    assert validate_step(hass, "heat_pump", {"hp_control_entity": "select.other"}) == {
+        "hp_control_entity": "hp_options"
+    }
+    assert validate_step(hass, "heat_pump", {"hp_block_min_temp": 5, "hp_block_full_temp": 5}) == {
+        "hp_block_full_temp": "hp_temps"
+    }

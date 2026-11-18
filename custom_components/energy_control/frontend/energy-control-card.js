@@ -356,6 +356,21 @@ class EnergyControlCard extends HTMLElement {
       spread([...ahead].reverse()).forEach((r) => mark(r, "hi", "▲"));
     }
 
+    // Heat pump and EV strips under the prices: what the flexible loads do.
+    const HP = { block: ["var(--ec-hp-block, #d6455d)", "HP blocked"], comfort: ["var(--ec-hp-comfort, #9ccc65)", "HP comfort"], boost: ["var(--ec-hp-boost, #2e9e5b)", "HP boost"] };
+    const strips = [
+      ["HP", (s) => HP[s.hp_mode]?.[0]],
+      ["EV", (s) => (s.ev_kw > 0 ? "var(--ec-ev, #8e6cbf)" : null)],
+    ].filter(([, fn]) => future.some((s) => fn(s)));
+    strips.forEach(([label, fn], k) => {
+      const y = pY + pH + 6 + k * 9;
+      g.text(2, y + 7, label, "lbl");
+      for (const s of future) {
+        const c = fn(s);
+        if (c) g.rect(x(s.t), y, Math.max(0.5, x(s.t1) - x(s.t)), 6, c, 0.85);
+      }
+    });
+
     // Battery pane: planned power as solid blocks (faded in the past), actual
     // as a red line; SoC as a blue line on the right axis.
     const bY = pY + pH + 44, bH = 170;
@@ -457,6 +472,8 @@ class EnergyControlCard extends HTMLElement {
         <span>SoC <b>→ ${s.soc_end_pct.toFixed(0)}%</b></span>
         <span>Price <b>${s.price_estimated ? "≈ " : ""}${ct(s.import_price)}</b> <span class="muted">${s.price_estimated ? "estimated · " : ""}export ${s.export_price_known === false ? "unknown" : ct(s.export_price)}</span></span>
         ${s.curtail_kw > 0 ? `<span>Curtail <b>${kwS(s.curtail_kw)}</b></span>` : ""}
+        ${s.hp_mode && s.hp_mode !== "normal" ? `<span>Heat pump <b>${esc(s.hp_mode)}</b></span>` : ""}
+        ${s.ev_kw > 0 ? `<span>EV <b>${kwS(s.ev_kw)}</b></span>` : ""}
         ${s.reason ? `<div class="r">${esc(s.reason)}</div>` : ""}`,
     };
   }

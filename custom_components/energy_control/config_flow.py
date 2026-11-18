@@ -24,6 +24,12 @@ from .const import (
     CONF_DISCHARGE_EFF,
     CONF_DISCHARGE_LIMIT_ENTITY,
     CONF_ENERGY_TAX,
+    CONF_EV_CAPACITY_KWH,
+    CONF_EV_CONNECTED_ENTITY,
+    CONF_EV_POWER_ENTITY,
+    CONF_EV_POWER_W,
+    CONF_EV_SOC_ENTITY,
+    CONF_EV_SWITCH_ENTITY,
     CONF_EXPORT_ENERGY_ENTITY,
     CONF_EXPORT_FACTOR,
     CONF_EXPORT_FEE,
@@ -31,8 +37,19 @@ from .const import (
     CONF_EXPORT_MODE,
     CONF_FEED_IN_LIMIT_ENTITY,
     CONF_GRID_POWER_ENTITY,
+    CONF_HP_BLOCK_FULL_TEMP,
+    CONF_HP_BLOCK_MIN_TEMP,
+    CONF_HP_BOOST,
+    CONF_HP_COMFORT,
+    CONF_HP_CONTROL_ENTITY,
+    CONF_HP_MAX_BLOCK_DAY_H,
+    CONF_HP_MAX_BLOCK_MIN,
+    CONF_HP_POWER_ENTITY,
+    CONF_HP_SWITCH_ON_BLOCKS,
     CONF_IDLE_SETPOINT_W,
     CONF_IMPORT_ENERGY_ENTITY,
+    CONF_INDOOR_MIN_TEMP,
+    CONF_INDOOR_TEMP_ENTITY,
     CONF_LOAD_DAYS,
     CONF_LOAD_ENTITY,
     CONF_LOAD_FALLBACK_W,
@@ -44,6 +61,7 @@ from .const import (
     CONF_NETTING_END,
     CONF_NORDPOOL_AREA,
     CONF_NORDPOOL_ENTRY,
+    CONF_OUTDOOR_TEMP_ENTITY,
     CONF_PRICE_ENTITY,
     CONF_PRICE_FORECAST_ENTITY,
     CONF_PRICE_INCLUDES_TAXES,
@@ -67,7 +85,7 @@ from .const import (
 )
 from .coordinator import state_float
 
-STEPS = ("prices", "pv", "battery", "load", "control")
+STEPS = ("prices", "pv", "battery", "load", "control", "heat_pump", "ev")
 
 # Entity-id suffixes of the core `victron_gx` integration used as suggestions.
 VICTRON_SUGGESTIONS: dict[str, tuple[str, ...]] = {
@@ -228,12 +246,53 @@ def step_schema(step: str, values: dict[str, Any]) -> vol.Schema:
                 _opt(CONF_PV_POWER_ENTITY, values): _entity("sensor"),
             }
         )
+    if step == "heat_pump":
+        return vol.Schema(
+            {
+                _opt(CONF_HP_CONTROL_ENTITY, values): _entity(["select", "switch", "input_boolean"]),
+                _req(CONF_HP_SWITCH_ON_BLOCKS, values): sel.BooleanSelector(),
+                _opt(CONF_HP_POWER_ENTITY, values): _entity("sensor"),
+                _opt(CONF_OUTDOOR_TEMP_ENTITY, values): _entity("sensor"),
+                _opt(CONF_INDOOR_TEMP_ENTITY, values): _entity("sensor"),
+                _req(CONF_INDOOR_MIN_TEMP, values): _num(5, 30, 0.5, "°C"),
+                _req(CONF_HP_MAX_BLOCK_MIN, values): _num(30, 240, 15, "min"),
+                _req(CONF_HP_BLOCK_MIN_TEMP, values): _num(-20, 20, 0.5, "°C"),
+                _req(CONF_HP_BLOCK_FULL_TEMP, values): _num(-10, 30, 0.5, "°C"),
+                _req(CONF_HP_MAX_BLOCK_DAY_H, values): _num(0, 24, 0.5, "h"),
+                _req(CONF_HP_COMFORT, values): sel.BooleanSelector(),
+                _req(CONF_HP_BOOST, values): sel.BooleanSelector(),
+            }
+        )
+    if step == "ev":
+        return vol.Schema(
+            {
+                _opt(CONF_EV_SWITCH_ENTITY, values): _entity(["switch", "input_boolean"]),
+                _req(CONF_EV_POWER_W, values): _num(500, 50000, 100, "W"),
+                _opt(CONF_EV_POWER_ENTITY, values): _entity("sensor"),
+                _opt(CONF_EV_CONNECTED_ENTITY, values): _entity("binary_sensor"),
+                _opt(CONF_EV_SOC_ENTITY, values): _entity("sensor"),
+                _req(CONF_EV_CAPACITY_KWH, values): _num(0, 300, 1, "kWh"),
+            }
+        )
     raise ValueError(step)
 
 
 def validate_step(hass: HomeAssistant, step: str, user_input: dict[str, Any]) -> dict[str, str]:
     """Return form errors for a step."""
     errors: dict[str, str] = {}
+    if step == "heat_pump":
+        entity_id = user_input.get(CONF_HP_CONTROL_ENTITY)
+        if entity_id and entity_id.startswith("select."):
+            from .flexible.heatpump import HpMode
+            from .flexible.manager import sg_ready_options
+
+            state = hass.states.get(entity_id)
+            mapping = sg_ready_options(list(state.attributes.get("options") or [])) if state else {}
+            if HpMode.NORMAL not in mapping or HpMode.BLOCK not in mapping:
+                errors[CONF_HP_CONTROL_ENTITY] = "hp_options"
+        if float(user_input.get(CONF_HP_BLOCK_FULL_TEMP, 12)) <= float(user_input.get(CONF_HP_BLOCK_MIN_TEMP, 2)):
+            errors[CONF_HP_BLOCK_FULL_TEMP] = "hp_temps"
+        return errors
     if step == "prices":
         if user_input.get(CONF_NORDPOOL_ENTRY):
             entry = hass.config_entries.async_get_entry(user_input[CONF_NORDPOOL_ENTRY])
@@ -308,6 +367,14 @@ class EnergyControlConfigFlow(ConfigFlow, domain=DOMAIN):
         """Hardware control."""
         return await self._step("control", user_input)
 
+    async def async_step_heat_pump(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Heat pump (SG Ready / EVU)."""
+        return await self._step("heat_pump", user_input)
+
+    async def async_step_ev(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """EV charger."""
+        return await self._step("ev", user_input)
+
     @staticmethod
     @callback
     def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
@@ -370,3 +437,11 @@ class EnergyControlOptionsFlow(OptionsFlow):
     async def async_step_control(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Hardware control."""
         return await self._step("control", user_input)
+
+    async def async_step_heat_pump(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Heat pump (SG Ready / EVU)."""
+        return await self._step("heat_pump", user_input)
+
+    async def async_step_ev(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """EV charger."""
+        return await self._step("ev", user_input)

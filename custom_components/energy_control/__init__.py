@@ -25,7 +25,14 @@ from .websocket import async_setup_websocket
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = [Platform.BINARY_SENSOR, Platform.NUMBER, Platform.SELECT, Platform.SENSOR, Platform.SWITCH]
+PLATFORMS = [
+    Platform.BINARY_SENSOR,
+    Platform.NUMBER,
+    Platform.SELECT,
+    Platform.SENSOR,
+    Platform.SWITCH,
+    Platform.TIME,
+]
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 
@@ -84,6 +91,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: EnergyControlConfigEntr
     """Unload: hand control back to the ESS first."""
     controller = entry.runtime_data.controller
     await controller.async_stop()
+    # Never leave the heat pump blocked by a plan nobody executes any more.
+    await entry.runtime_data.coordinator.flex.async_release()
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if not unloaded and controller.reload_config is not None:
         # The reload stops here: nobody would own the hardware.
@@ -94,5 +103,5 @@ async def async_unload_entry(hass: HomeAssistant, entry: EnergyControlConfigEntr
 
 async def async_remove_entry(hass: HomeAssistant, entry: EnergyControlConfigEntry) -> None:
     """Delete the entry's stores (control was already released on unload)."""
-    for suffix in ("settings", "history", "originals", "pending_restores", "price_archive"):
+    for suffix in ("settings", "history", "originals", "pending_restores", "price_archive", "flexible"):
         await Store(hass, 1, f"{DOMAIN}.{entry.entry_id}.{suffix}").async_remove()

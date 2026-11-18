@@ -60,6 +60,25 @@ PV_UNIT_WATT: Final = "watt"
 PV_UNIT_PERCENT: Final = "percent"
 CONF_PV_LIMIT_MAX_W: Final = "pv_limit_max_w"
 CONF_PV_POWER_ENTITY: Final = "pv_power_entity"
+# Flexible loads: heat pump (SG Ready / EVU) and EV charger
+CONF_HP_CONTROL_ENTITY: Final = "hp_control_entity"  # select (SG Ready modes) or switch (EVU relay)
+CONF_HP_SWITCH_ON_BLOCKS: Final = "hp_switch_on_blocks"  # switch: on = EVU block
+CONF_HP_POWER_ENTITY: Final = "hp_power_entity"
+CONF_OUTDOOR_TEMP_ENTITY: Final = "outdoor_temp_entity"
+CONF_INDOOR_TEMP_ENTITY: Final = "indoor_temp_entity"
+CONF_INDOOR_MIN_TEMP: Final = "indoor_min_temp"
+CONF_HP_MAX_BLOCK_MIN: Final = "hp_max_block_min"
+CONF_HP_BLOCK_MIN_TEMP: Final = "hp_block_min_temp"
+CONF_HP_BLOCK_FULL_TEMP: Final = "hp_block_full_temp"
+CONF_HP_MAX_BLOCK_DAY_H: Final = "hp_max_block_day_h"
+CONF_HP_COMFORT: Final = "hp_comfort"
+CONF_HP_BOOST: Final = "hp_boost"
+CONF_EV_SWITCH_ENTITY: Final = "ev_switch_entity"
+CONF_EV_POWER_W: Final = "ev_power_w"
+CONF_EV_POWER_ENTITY: Final = "ev_power_entity"
+CONF_EV_CONNECTED_ENTITY: Final = "ev_connected_entity"
+CONF_EV_SOC_ENTITY: Final = "ev_soc_entity"
+CONF_EV_CAPACITY_KWH: Final = "ev_capacity_kwh"
 
 DEFAULTS: Final[dict[str, object]] = {
     CONF_PRICE_INCLUDES_TAXES: True,
@@ -85,6 +104,16 @@ DEFAULTS: Final[dict[str, object]] = {
     CONF_IDLE_SETPOINT_W: 30,
     CONF_PV_LIMIT_UNIT: PV_UNIT_WATT,
     CONF_PV_LIMIT_MAX_W: 2700,
+    CONF_HP_SWITCH_ON_BLOCKS: True,
+    CONF_INDOOR_MIN_TEMP: 19.0,
+    CONF_HP_MAX_BLOCK_MIN: 120,
+    CONF_HP_BLOCK_MIN_TEMP: 2.0,
+    CONF_HP_BLOCK_FULL_TEMP: 12.0,
+    CONF_HP_MAX_BLOCK_DAY_H: 6.0,
+    CONF_HP_COMFORT: True,
+    CONF_HP_BOOST: False,
+    CONF_EV_POWER_W: 3700,
+    CONF_EV_CAPACITY_KWH: 0.0,
 }
 
 # --- Runtime settings (entities, persisted in a Store) -----------------------
@@ -97,6 +126,11 @@ SET_MAX_SOC: Final = "max_soc"
 SET_CYCLE_COST: Final = "cycle_cost"  # ct/kWh discharged
 SET_ARBITRAGE_MARGIN: Final = "arbitrage_margin"  # ct/kWh
 SET_PRICE_ESTIMATES: Final = "price_estimates"  # plan beyond published prices
+SET_HP_CONTROL: Final = "hp_control"
+SET_EV_MODE: Final = "ev_mode"
+SET_EV_ENERGY: Final = "ev_energy"  # kWh still to charge (without an EV SoC sensor)
+SET_EV_TARGET_SOC: Final = "ev_target_soc"
+SET_EV_READY_BY: Final = "ev_ready_by"
 
 
 class Mode(StrEnum):
@@ -129,6 +163,11 @@ DEFAULT_SETTINGS: Final[dict[str, object]] = {
     SET_CYCLE_COST: 2.0,
     SET_ARBITRAGE_MARGIN: 1.0,
     SET_PRICE_ESTIMATES: True,
+    SET_HP_CONTROL: False,
+    SET_EV_MODE: "smart",
+    SET_EV_ENERGY: 0.0,
+    SET_EV_TARGET_SOC: 80.0,
+    SET_EV_READY_BY: "07:00:00",
 }
 
 # --- Timing ------------------------------------------------------------------

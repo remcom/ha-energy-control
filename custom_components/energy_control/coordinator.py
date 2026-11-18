@@ -22,10 +22,12 @@ from .const import (
     CONF_CHARGE_EFF,
     CONF_DISCHARGE_EFF,
     CONF_ENERGY_TAX,
+    CONF_EV_POWER_ENTITY,
     CONF_EXPORT_FACTOR,
     CONF_EXPORT_FEE,
     CONF_EXPORT_FIXED,
     CONF_EXPORT_MODE,
+    CONF_HP_POWER_ENTITY,
     CONF_LOAD_DAYS,
     CONF_LOAD_ENTITY,
     CONF_LOAD_FALLBACK_W,
@@ -37,6 +39,7 @@ from .const import (
     CONF_NETTING_END,
     CONF_NORDPOOL_AREA,
     CONF_NORDPOOL_ENTRY,
+    CONF_OUTDOOR_TEMP_ENTITY,
     CONF_PRICE_ENTITY,
     CONF_PRICE_FORECAST_ENTITY,
     CONF_PRICE_INCLUDES_TAXES,
@@ -64,6 +67,7 @@ from .const import (
     SET_PRICE_ESTIMATES,
     Mode,
 )
+from .flexible.manager import FlexibleLoads
 from .optimizer import Action, BatteryParams, GridParams, Plan, Strategy, optimize
 from .price_archive import PriceArchive
 from .providers.load import LoadProfile, build_load_profile
@@ -153,11 +157,13 @@ class EnergyControlCoordinator(DataUpdateCoordinator[Plan]):
         self.price_archive = PriceArchive(hass, entry.entry_id)
         self.published: list[PricePoint] = []  # prices without estimates
         self.price_estimate_source: str | None = None
+        self.flex = FlexibleLoads(hass, self)
 
     # --- lifecycle ---------------------------------------------------------
     async def async_setup(self) -> None:
         """Load persisted settings and start listeners."""
         await self.price_archive.async_load()
+        await self.flex.async_load()
         stored = await self._settings_store.async_load()
         if stored:
             self.settings.update({k: v for k, v in stored.items() if k in DEFAULT_SETTINGS})
@@ -197,6 +203,11 @@ class EnergyControlCoordinator(DataUpdateCoordinator[Plan]):
             return Mode(self.settings[SET_MODE])
         except ValueError:
             return Mode.ADVISORY
+
+    async def async_save_settings(self) -> None:
+        """Persist settings changed in place (no replan)."""
+        await self._settings_store.async_save(self.settings)
+        self.async_update_listeners()
 
     async def async_set_setting(self, key: str, value: Any) -> None:
         """Change a runtime setting, persist it and replan."""
@@ -333,27 +344,48 @@ class EnergyControlCoordinator(DataUpdateCoordinator[Plan]):
     async def _async_profile_from_statistics(
         self, entity_id: str, now: datetime, tz: Any, fallback: float
     ) -> LoadProfile:
+        """Hourly load history; heat pump and EV are subtracted (planned separately)."""
         from homeassistant.components.recorder import get_instance
         from homeassistant.components.recorder.statistics import statistics_during_period
 
-        state = self.hass.states.get(entity_id)
-        is_energy = state is not None and state.attributes.get("device_class") == "energy"
-        units = {"energy": "kWh"} if is_energy else {"power": "kW"}
-        stat_type = "change" if is_energy else "mean"
+        flexible = [e for e in (self.config.get(CONF_HP_POWER_ENTITY), self.config.get(CONF_EV_POWER_ENTITY)) if e]
+        outdoor = self.config.get(CONF_OUTDOOR_TEMP_ENTITY)
+        ids = {entity_id, *flexible, *([outdoor] if outdoor else [])}
         start = now - timedelta(days=int(self.config[CONF_LOAD_DAYS]))
+        units = {"energy": "kWh", "power": "kW", "temperature": "°C"}
         stats = await get_instance(self.hass).async_add_executor_job(
-            statistics_during_period, self.hass, start, now, {entity_id}, "hour", units, {stat_type}
+            statistics_during_period, self.hass, start, now, ids, "hour", units, {"mean", "change"}
         )
-        samples = []
-        for row in stats.get(entity_id, []):
+        series = {key: self._hourly(stats.get(key, []), key) for key in ids}
+        samples = series[entity_id]
+        if flexible:
+            # Energy per hour (kWh) and mean power (kW) are the same number.
+            minus: dict[datetime, float] = {}
+            for key in flexible:
+                for begin, value in series[key]:
+                    minus[begin] = minus.get(begin, 0.0) + value
+            samples = [(begin, max(0.0, value - minus.get(begin, 0.0))) for begin, value in samples]
+        hp_entity = self.config.get(CONF_HP_POWER_ENTITY)
+        if hp_entity and outdoor:
+            self.flex.fit_hp_model(series[hp_entity], dict(series[outdoor]))
+        elif hp_entity:
+            self.flex.fit_hp_model(series[hp_entity], {})
+        _LOGGER.debug("Load profile from %d hourly samples of %s", len(samples), entity_id)
+        return build_load_profile(samples, tz, fallback_kw=fallback)
+
+    def _hourly(self, rows: list[dict[str, Any]], entity_id: str) -> list[tuple[datetime, float]]:
+        """(hour start, value): energy as change per hour, otherwise the mean."""
+        state = self.hass.states.get(entity_id)
+        stat_type = "change" if state is not None and state.attributes.get("device_class") == "energy" else "mean"
+        result = []
+        for row in rows:
             begin = row["start"]
             if not isinstance(begin, datetime):
                 begin = dt_util.utc_from_timestamp(begin)
             value = row.get(stat_type)
             if value is not None:
-                samples.append((begin, float(value)))
-        _LOGGER.debug("Load profile from %d hourly samples of %s", len(samples), entity_id)
-        return build_load_profile(samples, tz, fallback_kw=fallback)
+                result.append((begin, float(value)))
+        return result
 
     async def _async_price_estimates(self, now: datetime, tz: Any) -> list[PricePoint]:
         """Estimated quarters between the published prices and the estimate horizon."""
@@ -442,6 +474,7 @@ class EnergyControlCoordinator(DataUpdateCoordinator[Plan]):
         if not slots:
             self.last_plan_error = "no_future_prices"
             raise UpdateFailed("Price forecast does not cover the current time")
+        slots = self.flex.with_expected_load(slots)
 
         if self.history:
             load_kw, pv_kw = self.history.live_average(now)
@@ -470,16 +503,15 @@ class EnergyControlCoordinator(DataUpdateCoordinator[Plan]):
             )
         else:
             ir.async_delete_issue(self.hass, DOMAIN, issue_id)
-        plan = await self.hass.async_add_executor_job(
-            partial(
-                optimize,
-                slots,
-                self.battery_params(soc),
-                self.grid_params(),
-                self.strategy(),
-                now=now,
-            )
+        run = partial(
+            optimize, battery=self.battery_params(soc), grid=self.grid_params(), strategy=self.strategy(), now=now
         )
+        plan = await self.hass.async_add_executor_job(run, slots)
+        # Heat pump and EV are scheduled on the first plan's prices and flows;
+        # the battery is then re-planned around their shifted consumption.
+        if (adjusted := self.flex.schedule(slots, plan, now)) is not None:
+            plan = await self.hass.async_add_executor_job(run, adjusted)
+        self.flex.annotate(plan)
         self.last_plan_error = "infeasible_grid_constraints" if not plan.feasible else None
         grid_issue = f"grid_constraints_{self.config_entry.entry_id}"
         if plan.feasible:

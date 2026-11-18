@@ -556,3 +556,89 @@ async def test_built_in_estimates_extend_the_plan(hass: HomeAssistant, entry, se
     await coordinator.async_set_setting("price_estimates", False)
     await coordinator.async_refresh()
     assert coordinator.data.estimated_from is None
+
+
+HP_SELECT = "select.esp_heatpump_mode"
+HP_OPTIONS = ["Normal mode", "EVU mode", "Comfort mode", "Boost mode"]
+
+
+async def _hp_setup(hass: HomeAssistant, entry, outdoor: str = "10") -> object:
+    from custom_components.energy_control.flexible.heatpump import HpMode
+    from custom_components.energy_control.providers.slots import floor_slot
+
+    coordinator = entry.runtime_data.coordinator
+    coordinator.config.update(
+        {"hp_control_entity": HP_SELECT, "outdoor_temp_entity": "sensor.outdoor", "hp_comfort": False}
+    )
+    _set(hass, HP_SELECT, "Normal mode", options=HP_OPTIONS)
+    _set(hass, "sensor.outdoor", outdoor, unit_of_measurement="°C")
+    await coordinator.async_set_setting("mode", "auto")
+    await coordinator.async_set_setting("hp_control", True)
+    flex = coordinator.flex
+    flex.hp_modes = {floor_slot(dt_util.utcnow()): HpMode.BLOCK}
+    return flex
+
+
+async def test_heat_pump_blocked_when_planned(hass: HomeAssistant, entry, setup) -> None:
+    _, select_calls = setup
+    flex = await _hp_setup(hass, entry)
+    await flex.async_apply()
+    assert select_calls[-1].data == {"entity_id": HP_SELECT, "option": "EVU mode"}
+    assert flex.blocked_since is not None and flex.hp_status == "blocked"
+
+    # Disabling control hands the heat pump back in normal operation.
+    await entry.runtime_data.coordinator.async_set_setting("hp_control", False)
+    await flex.async_apply()
+    assert select_calls[-1].data["option"] == "Normal mode"
+    assert not flex.hp_active and flex.blocked_since is None
+    assert flex.recovery_until is not None
+
+
+async def test_heat_pump_never_blocked_when_cold(hass: HomeAssistant, entry, setup) -> None:
+    flex = await _hp_setup(hass, entry, outdoor="1.5")
+    await flex.async_apply()
+    assert hass.states.get(HP_SELECT).state == "Normal mode"
+    assert flex.hp_status == "too_cold_to_block"
+    _set(hass, "sensor.outdoor", STATE_UNAVAILABLE)
+    await flex.async_apply()
+    assert flex.hp_status == "outdoor_temperature_unknown"
+
+
+async def test_heat_pump_block_limit_and_unload(hass: HomeAssistant, entry, setup, freezer) -> None:
+    flex = await _hp_setup(hass, entry, outdoor="7")  # 60 min allowed at 7 °C
+    await flex.async_apply()
+    assert hass.states.get(HP_SELECT).state == "EVU mode"
+    flex.blocked_since = dt_util.utcnow() - timedelta(minutes=61)
+    await flex.async_apply()
+    assert hass.states.get(HP_SELECT).state == "Normal mode"
+    assert flex.hp_status == "block_limit_reached" or flex.hp_status == "recovering"
+
+    flex.recovery_until = None
+    flex.blocks.clear()
+    await flex.async_apply()
+    assert hass.states.get(HP_SELECT).state == "EVU mode"
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    assert hass.states.get(HP_SELECT).state == "Normal mode"
+
+
+async def test_plan_includes_heat_pump_and_ev(hass: HomeAssistant, entry, setup) -> None:
+    coordinator = entry.runtime_data.coordinator
+    before = coordinator.data.slots[3].load_kw
+    coordinator.config.update(
+        {"hp_control_entity": HP_SELECT, "ev_switch_entity": "switch.charger", "ev_power_w": 4000}
+    )
+    _set(hass, HP_SELECT, "Normal mode", options=HP_OPTIONS)
+    _set(hass, "switch.charger", "off")
+    coordinator.flex.hp_model = (0.8, 0.0)
+    await coordinator.async_set_setting("mode", "auto")
+    await coordinator.async_set_setting("hp_control", True)
+    await coordinator.async_set_setting("ev_energy", 3.0)
+    await coordinator.async_refresh()
+    plan = coordinator.data
+    assert all(s.hp_mode is not None for s in plan.slots)
+    assert plan.slots[3].load_forecast_kw >= before + 0.8 - 1e-6 or plan.slots[3].hp_mode != "normal"
+    charging = [s for s in plan.slots if s.ev_kw > 0]
+    # 3 kWh at 4 kW = 45 minutes; a partial first quarter can add one more.
+    assert len(charging) in (3, 4)
+    assert sum(s.ev_kw * s.hours for s in charging) >= 3.0 - 1e-6
+    assert {s.start for s in charging} == coordinator.flex.ev_slots

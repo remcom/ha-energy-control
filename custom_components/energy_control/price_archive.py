@@ -35,6 +35,7 @@ class PriceArchive:
         self.prices: dict[str, tuple[float, float | None]] = {}
         self.weather: dict[str, tuple[float | None, float | None]] = {}
         self._wind: dict[datetime, float] = {}
+        self.temperature: dict[datetime, float] = {}  # hourly outdoor forecast (°C)
         self._wind_at: datetime | None = None
         self._bootstrapped = False
 
@@ -140,7 +141,7 @@ class PriceArchive:
         """
         if weather_entity and (self._wind_at is None or now - self._wind_at >= WEATHER_REFRESH):
             self._wind_at = now
-            self._wind = await self._async_wind(weather_entity)
+            self._wind, self.temperature = await self._async_forecast(weather_entity)
         current = hour_key(now)
         changed = False
         for hours_ahead in range(0, 72):
@@ -161,9 +162,11 @@ class PriceArchive:
         if changed:
             self._save()
 
-    async def _async_wind(self, entity_id: str) -> dict[datetime, float]:
+    async def _async_forecast(self, entity_id: str) -> tuple[dict[datetime, float], dict[datetime, float]]:
+        """Hourly wind (m/s) and temperature (°C) forecasts."""
         state = self.hass.states.get(entity_id)
         factor = WIND_TO_MS.get(str(state.attributes.get("wind_speed_unit")) if state else "", 1 / 3.6)
+        fahrenheit = state is not None and state.attributes.get("temperature_unit") == "°F"
         try:
             response = await self.hass.services.async_call(
                 "weather",
@@ -174,15 +177,21 @@ class PriceArchive:
             )
         except (HomeAssistantError, ValueError) as err:
             _LOGGER.debug("No hourly weather forecast from %s: %s", entity_id, err)
-            return self._wind
+            return self._wind, self.temperature
         rows = ((response or {}).get(entity_id) or {}).get("forecast") or []
         wind: dict[datetime, float] = {}
+        temperature: dict[datetime, float] = {}
         for row in rows:
             when = parse_dt(row.get("datetime"))
+            if when is None:
+                continue
             speed = to_float(row.get("wind_speed"))
-            if when is not None and speed is not None and speed >= 0:
+            if speed is not None and speed >= 0:
                 wind[hour_key(when)] = speed * factor
-        return wind or self._wind
+            temp = to_float(row.get("temperature"))
+            if temp is not None:
+                temperature[hour_key(when)] = (temp - 32) / 1.8 if fahrenheit else temp
+        return wind or self._wind, temperature or self.temperature
 
     def weather_map(self) -> dict[datetime, Weather]:
         """Archived weather drivers per UTC hour."""

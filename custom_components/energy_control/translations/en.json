@@ -73,13 +73,45 @@
           "pv_limit_max_w": "PV inverter max power",
           "pv_power_entity": "PV inverter power sensor"
         }
+      },
+      "heat_pump": {
+        "title": "Heat pump (SG Ready / EVU)",
+        "description": "Optional. Energy Control blocks the heat pump (EVU) in expensive quarters when the catch-up afterwards is clearly cheaper, and can use comfort/boost when energy is nearly free. Use a select with SG Ready modes (options containing Normal, EVU/Block, Comfort, Boost are recognised) or a switch/relay. The allowed block length shrinks with the outdoor temperature: full length at the 'full length from' temperature, none at the minimum. Disable other automations that set the same entity, and turn on 'Heat pump control' to start.",
+        "data": {
+          "hp_control_entity": "Heat pump mode entity (select or switch)",
+          "hp_switch_on_blocks": "Switch on = EVU block",
+          "hp_power_entity": "Heat pump power sensor",
+          "outdoor_temp_entity": "Outdoor temperature sensor",
+          "indoor_temp_entity": "Indoor temperature sensor (optional)",
+          "indoor_min_temp": "Never block below this indoor temperature",
+          "hp_max_block_min": "Maximum block length",
+          "hp_block_min_temp": "No blocking at or below (outdoor)",
+          "hp_block_full_temp": "Full block length from (outdoor)",
+          "hp_max_block_day_h": "Maximum blocked hours per day",
+          "hp_comfort": "Use comfort mode when energy is cheap",
+          "hp_boost": "Use boost mode (only if the heat pump supports it)"
+        }
+      },
+      "ev": {
+        "title": "EV charger",
+        "description": "Optional. Smart mode charges in the cheapest quarters (exported PV counts at the export price) before the ready-by time. With an EV state-of-charge sensor and capacity the energy needed follows from the target SoC; otherwise set 'EV energy to charge', which counts down while charging.",
+        "data": {
+          "ev_switch_entity": "Charger switch (on = charging allowed)",
+          "ev_power_w": "Charging power",
+          "ev_power_entity": "Charging power sensor (optional)",
+          "ev_connected_entity": "Car connected sensor (optional)",
+          "ev_soc_entity": "Car state-of-charge sensor (optional)",
+          "ev_capacity_kwh": "Car battery capacity (with SoC sensor)"
+        }
       }
     },
     "error": {
       "entity_not_found": "Entity not found",
       "no_price_forecast": "No price forecast found in the attributes of this sensor",
       "invalid_price_unit": "Use prices in EUR/kWh, EUR/MWh or ct/kWh.",
-      "invalid_nordpool": "Select a valid core Nord Pool integration and a market area."
+      "invalid_nordpool": "Select a valid core Nord Pool integration and a market area.",
+      "hp_options": "The select has no recognisable Normal and EVU/Block options.",
+      "hp_temps": "'Full block length from' must be above the minimum temperature."
     },
     "abort": {}
   },
@@ -92,7 +124,9 @@
           "pv": "Solar forecast",
           "battery": "Battery",
           "load": "Consumption & grid",
-          "control": "Victron ESS control"
+          "control": "Victron ESS control",
+          "heat_pump": "Heat pump",
+          "ev": "EV charger"
         }
       },
       "prices": {
@@ -167,13 +201,45 @@
           "pv_limit_max_w": "PV inverter max power",
           "pv_power_entity": "PV inverter power sensor"
         }
+      },
+      "heat_pump": {
+        "title": "Heat pump (SG Ready / EVU)",
+        "description": "Optional. Energy Control blocks the heat pump (EVU) in expensive quarters when the catch-up afterwards is clearly cheaper, and can use comfort/boost when energy is nearly free. Use a select with SG Ready modes (options containing Normal, EVU/Block, Comfort, Boost are recognised) or a switch/relay. The allowed block length shrinks with the outdoor temperature: full length at the 'full length from' temperature, none at the minimum. Disable other automations that set the same entity, and turn on 'Heat pump control' to start.",
+        "data": {
+          "hp_control_entity": "Heat pump mode entity (select or switch)",
+          "hp_switch_on_blocks": "Switch on = EVU block",
+          "hp_power_entity": "Heat pump power sensor",
+          "outdoor_temp_entity": "Outdoor temperature sensor",
+          "indoor_temp_entity": "Indoor temperature sensor (optional)",
+          "indoor_min_temp": "Never block below this indoor temperature",
+          "hp_max_block_min": "Maximum block length",
+          "hp_block_min_temp": "No blocking at or below (outdoor)",
+          "hp_block_full_temp": "Full block length from (outdoor)",
+          "hp_max_block_day_h": "Maximum blocked hours per day",
+          "hp_comfort": "Use comfort mode when energy is cheap",
+          "hp_boost": "Use boost mode (only if the heat pump supports it)"
+        }
+      },
+      "ev": {
+        "title": "EV charger",
+        "description": "Optional. Smart mode charges in the cheapest quarters (exported PV counts at the export price) before the ready-by time. With an EV state-of-charge sensor and capacity the energy needed follows from the target SoC; otherwise set 'EV energy to charge', which counts down while charging.",
+        "data": {
+          "ev_switch_entity": "Charger switch (on = charging allowed)",
+          "ev_power_w": "Charging power",
+          "ev_power_entity": "Charging power sensor (optional)",
+          "ev_connected_entity": "Car connected sensor (optional)",
+          "ev_soc_entity": "Car state-of-charge sensor (optional)",
+          "ev_capacity_kwh": "Car battery capacity (with SoC sensor)"
+        }
       }
     },
     "error": {
       "entity_not_found": "Entity not found",
       "no_price_forecast": "No price forecast found in the attributes of this sensor",
       "invalid_price_unit": "Use prices in EUR/kWh, EUR/MWh or ct/kWh.",
-      "invalid_nordpool": "Select a valid core Nord Pool integration and a market area."
+      "invalid_nordpool": "Select a valid core Nord Pool integration and a market area.",
+      "hp_options": "The select has no recognisable Normal and EVU/Block options.",
+      "hp_temps": "'Full block length from' must be above the minimum temperature."
     }
   },
   "selector": {
@@ -219,6 +285,14 @@
           "force_discharge": "Force discharge",
           "hold": "Hold battery"
         }
+      },
+      "ev_mode": {
+        "name": "EV charging",
+        "state": {
+          "manual": "Manual (not controlled)",
+          "smart": "Smart (cheapest before ready-by)",
+          "now": "Now"
+        }
       }
     },
     "switch": {
@@ -233,6 +307,9 @@
       },
       "price_estimates": {
         "name": "Plan with estimated prices"
+      },
+      "hp_control": {
+        "name": "Heat pump control"
       }
     },
     "number": {
@@ -247,6 +324,12 @@
       },
       "arbitrage_margin": {
         "name": "Arbitrage margin"
+      },
+      "ev_energy": {
+        "name": "EV energy to charge"
+      },
+      "ev_target_soc": {
+        "name": "EV target SoC"
       }
     },
     "binary_sensor": {
@@ -299,6 +382,32 @@
       },
       "load_forecast_accuracy": {
         "name": "Consumption forecast accuracy (7 days)"
+      },
+      "heat_pump_mode": {
+        "name": "Heat pump mode",
+        "state": {
+          "normal": "Normal",
+          "block": "Blocked (EVU)",
+          "comfort": "Comfort",
+          "boost": "Boost",
+          "off": "Not controlled"
+        }
+      },
+      "ev_charging": {
+        "name": "EV charging status",
+        "state": {
+          "manual": "Manual",
+          "waiting": "Waiting for a cheap quarter",
+          "charging": "Charging",
+          "done": "Done",
+          "unavailable": "Charger unavailable",
+          "off": "Off"
+        }
+      }
+    },
+    "time": {
+      "ev_ready_by": {
+        "name": "EV ready by"
       }
     }
   },

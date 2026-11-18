@@ -272,6 +272,13 @@ class VictronController:
     async def _tick(self, now: datetime) -> None:
         self._record(now)
         await self.async_apply()
+        if not self._stopping:
+            # Heat pump and EV follow the plan independently of the ESS:
+            # a failing battery actuator must not keep the heat pump blocked.
+            try:
+                await self.coordinator.flex.async_apply(now)
+            except HomeAssistantError as err:
+                _LOGGER.warning("Flexible load control failed: %s", err)
 
     # --- history -----------------------------------------------------------
     def _record(self, now: datetime) -> None:

@@ -10,7 +10,16 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .const import DOMAIN, SET_ARBITRAGE_MARGIN, SET_CYCLE_COST, SET_MAX_SOC, SET_MIN_SOC
+from .const import (
+    CONF_EV_SOC_ENTITY,
+    DOMAIN,
+    SET_ARBITRAGE_MARGIN,
+    SET_CYCLE_COST,
+    SET_EV_ENERGY,
+    SET_EV_TARGET_SOC,
+    SET_MAX_SOC,
+    SET_MIN_SOC,
+)
 from .data import EnergyControlConfigEntry, EnergyControlData
 from .entity import EnergyControlEntity
 
@@ -52,11 +61,31 @@ NUMBERS = (
 )
 
 
+EV_ENERGY = SettingNumberDescription(
+    key=SET_EV_ENERGY,
+    native_min_value=0,
+    native_max_value=200,
+    native_step=0.5,
+    native_unit_of_measurement="kWh",
+)
+EV_TARGET = SettingNumberDescription(
+    key=SET_EV_TARGET_SOC,
+    native_min_value=10,
+    native_max_value=100,
+    native_step=1,
+    native_unit_of_measurement=PERCENTAGE,
+)
+
+
 async def async_setup_entry(
     hass: HomeAssistant, entry: EnergyControlConfigEntry, async_add_entities: AddConfigEntryEntitiesCallback
 ) -> None:
     """Set up numbers."""
-    async_add_entities(SettingNumber(entry.runtime_data, d) for d in NUMBERS)
+    data = entry.runtime_data
+    descriptions = list(NUMBERS)
+    if data.coordinator.flex.ev_configured:
+        descriptions.append(EV_TARGET if data.coordinator.config.get(CONF_EV_SOC_ENTITY) else EV_ENERGY)
+    async_add_entities(SettingNumber(data, d) for d in descriptions)
 
 
 class SettingNumber(EnergyControlEntity, NumberEntity):

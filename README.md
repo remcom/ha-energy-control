@@ -161,6 +161,46 @@ battery assistance is retained; a configured limit is never silently discarded.
 
 > Victron stores these settings in flash; Energy Control only writes on change (a few writes per hour).
 
+## Heat pump and EV (flexible loads)
+
+Configure them under **Heat pump** and **EV charger** in the integration options. Both are planned
+together with the battery: they are scheduled on the first plan's prices and energy flows, after
+which the battery is re-planned around their shifted consumption.
+
+### Heat pump (SG Ready / EVU)
+
+Select the heat pump's mode entity: a **select** with SG Ready modes (options containing *Normal*,
+*EVU*/*Block*, *Comfort* and *Boost* are recognised) or a **switch**/relay on the EVU contact. Disable
+other automations that set the same entity, then turn on **Heat pump control**.
+
+- **Block (EVU)** in expensive quarters when catching up afterwards is clearly cheaper: the saving
+  is the blocked energy at its price minus the rebound (+5% for the lower COP) in the quarters
+  after the block, using the plan's marginal prices (exported PV counts at the export price).
+- **Outdoor temperature limits** the block length: full length (default 2 h) from 12 °C, shrinking
+  linearly to none at 2 °C, and the daily budget (default 6 h) scales the same way. Unknown
+  outdoor temperature means no blocking. Optional indoor sensor: never block below 19 °C inside.
+- **Recovery**: after a block, at least as long as the block ran, no new block starts.
+- **Comfort** (state 3) when PV is being exported or prices are in the cheapest 15%;
+  **Boost** (state 4) only if enabled (not every heat pump supports it) and energy has a negative price.
+- Live guards run every 10 s: a block ends immediately when it gets too cold, the house cools
+  below the minimum, the block limit is reached or the daily budget is used. Turning control off
+  or unloading the integration always returns the heat pump to **Normal**.
+- The heat pump's power is modelled from its power sensor history against outdoor temperature
+  (`kW = a + b × max(0, 18 °C − T)`), using the weather entity's hourly temperature forecast. Its
+  consumption is subtracted from the household load profile so it is not counted twice.
+
+`sensor.energy_control_heat_pump_mode` shows the commanded state with `status` (why), the hours
+blocked today, the next planned change and the planned schedule.
+
+### EV charger
+
+A charger **switch** (on = charging allowed), its power and optionally a power sensor, a
+car-connected sensor and the car's state-of-charge sensor with battery capacity. Modes
+(`select.energy_control_ev_charging`): **manual** (not touched), **smart** (cheapest quarters before
+*EV ready by*, exported PV counts at the export price) and **now**. The energy needed comes from the
+target SoC, or from *EV energy to charge*, which counts down while charging. If the energy does not
+fit before the deadline, charging starts immediately.
+
 ## Dashboard
 
 The card is loaded automatically. Add it to any dashboard:

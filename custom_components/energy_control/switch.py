@@ -9,7 +9,13 @@ from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .const import SET_BATTERY_TO_GRID, SET_CURTAIL_NEGATIVE, SET_GRID_CHARGE, SET_PRICE_ESTIMATES
+from .const import (
+    SET_BATTERY_TO_GRID,
+    SET_CURTAIL_NEGATIVE,
+    SET_GRID_CHARGE,
+    SET_HP_CONTROL,
+    SET_PRICE_ESTIMATES,
+)
 from .data import EnergyControlConfigEntry, EnergyControlData
 from .entity import EnergyControlEntity
 
@@ -20,7 +26,10 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: EnergyControlConfigEntry, async_add_entities: AddConfigEntryEntitiesCallback
 ) -> None:
     """Set up strategy switches."""
-    async_add_entities(StrategySwitch(entry.runtime_data, key) for key in SWITCHES)
+    keys = [*SWITCHES]
+    if entry.runtime_data.coordinator.flex.hp_configured:
+        keys.append(SET_HP_CONTROL)
+    async_add_entities(StrategySwitch(entry.runtime_data, key) for key in keys)
 
 
 class StrategySwitch(EnergyControlEntity, SwitchEntity):

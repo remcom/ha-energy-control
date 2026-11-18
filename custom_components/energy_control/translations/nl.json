@@ -73,13 +73,45 @@
           "pv_limit_max_w": "PV-omvormer max vermogen",
           "pv_power_entity": "PV-omvormer vermogen-sensor"
         }
+      },
+      "heat_pump": {
+        "title": "Warmtepomp (SG Ready / EVU)",
+        "description": "Optioneel. Energy Control blokkeert de warmtepomp (EVU) in dure kwartieren als het inhalen daarna duidelijk goedkoper is, en kan comfort/boost gebruiken als stroom bijna gratis is. Gebruik een select met SG Ready-standen (opties met Normal, EVU/Block, Comfort, Boost worden herkend) of een schakelaar/relais. De toegestane bloktijd wordt korter naarmate het buiten kouder is: volledig vanaf de temperatuur 'volledige lengte vanaf', niet onder het minimum. Zet andere automatiseringen voor dezelfde entiteit uit en zet 'Warmtepompsturing' aan om te starten.",
+        "data": {
+          "hp_control_entity": "Warmtepompstand-entiteit (select of schakelaar)",
+          "hp_switch_on_blocks": "Schakelaar aan = EVU-blokkade",
+          "hp_power_entity": "Vermogenssensor warmtepomp",
+          "outdoor_temp_entity": "Buitentemperatuursensor",
+          "indoor_temp_entity": "Binnentemperatuursensor (optioneel)",
+          "indoor_min_temp": "Nooit blokkeren onder deze binnentemperatuur",
+          "hp_max_block_min": "Maximale bloktijd",
+          "hp_block_min_temp": "Niet blokkeren bij of onder (buiten)",
+          "hp_block_full_temp": "Volledige bloktijd vanaf (buiten)",
+          "hp_max_block_day_h": "Maximaal geblokkeerde uren per dag",
+          "hp_comfort": "Comfortstand gebruiken bij goedkope stroom",
+          "hp_boost": "Booststand gebruiken (alleen als de warmtepomp dit ondersteunt)"
+        }
+      },
+      "ev": {
+        "title": "EV-lader",
+        "description": "Optioneel. Slim laden laadt in de goedkoopste kwartieren (teruggeleverde zonnestroom telt tegen de terugleverprijs) vóór de klaar-om-tijd. Met een laadtoestandsensor van de auto en de capaciteit volgt de benodigde energie uit de doel-SoC; anders stel je 'EV te laden energie' in, die tijdens het laden aftelt.",
+        "data": {
+          "ev_switch_entity": "Laderschakelaar (aan = laden toegestaan)",
+          "ev_power_w": "Laadvermogen",
+          "ev_power_entity": "Laadvermogensensor (optioneel)",
+          "ev_connected_entity": "Auto-aangesloten-sensor (optioneel)",
+          "ev_soc_entity": "Laadtoestandsensor auto (optioneel)",
+          "ev_capacity_kwh": "Accucapaciteit auto (met SoC-sensor)"
+        }
       }
     },
     "error": {
       "entity_not_found": "Entiteit niet gevonden",
       "no_price_forecast": "Geen prijsverwachting gevonden in de attributen van deze sensor",
       "invalid_price_unit": "Gebruik prijzen in EUR/kWh, EUR/MWh of ct/kWh.",
-      "invalid_nordpool": "Kies een geldige Nord Pool-integratie en een marktgebied."
+      "invalid_nordpool": "Kies een geldige Nord Pool-integratie en een marktgebied.",
+      "hp_options": "De select heeft geen herkenbare Normal- en EVU/Block-opties.",
+      "hp_temps": "'Volledige bloktijd vanaf' moet boven de minimumtemperatuur liggen."
     },
     "abort": {}
   },
@@ -92,7 +124,9 @@
           "pv": "Zonneverwachting",
           "battery": "Accu",
           "load": "Verbruik & net",
-          "control": "Victron ESS aansturing"
+          "control": "Victron ESS aansturing",
+          "heat_pump": "Warmtepomp",
+          "ev": "EV-lader"
         }
       },
       "prices": {
@@ -167,13 +201,45 @@
           "pv_limit_max_w": "PV-omvormer max vermogen",
           "pv_power_entity": "PV-omvormer vermogen-sensor"
         }
+      },
+      "heat_pump": {
+        "title": "Warmtepomp (SG Ready / EVU)",
+        "description": "Optioneel. Energy Control blokkeert de warmtepomp (EVU) in dure kwartieren als het inhalen daarna duidelijk goedkoper is, en kan comfort/boost gebruiken als stroom bijna gratis is. Gebruik een select met SG Ready-standen (opties met Normal, EVU/Block, Comfort, Boost worden herkend) of een schakelaar/relais. De toegestane bloktijd wordt korter naarmate het buiten kouder is: volledig vanaf de temperatuur 'volledige lengte vanaf', niet onder het minimum. Zet andere automatiseringen voor dezelfde entiteit uit en zet 'Warmtepompsturing' aan om te starten.",
+        "data": {
+          "hp_control_entity": "Warmtepompstand-entiteit (select of schakelaar)",
+          "hp_switch_on_blocks": "Schakelaar aan = EVU-blokkade",
+          "hp_power_entity": "Vermogenssensor warmtepomp",
+          "outdoor_temp_entity": "Buitentemperatuursensor",
+          "indoor_temp_entity": "Binnentemperatuursensor (optioneel)",
+          "indoor_min_temp": "Nooit blokkeren onder deze binnentemperatuur",
+          "hp_max_block_min": "Maximale bloktijd",
+          "hp_block_min_temp": "Niet blokkeren bij of onder (buiten)",
+          "hp_block_full_temp": "Volledige bloktijd vanaf (buiten)",
+          "hp_max_block_day_h": "Maximaal geblokkeerde uren per dag",
+          "hp_comfort": "Comfortstand gebruiken bij goedkope stroom",
+          "hp_boost": "Booststand gebruiken (alleen als de warmtepomp dit ondersteunt)"
+        }
+      },
+      "ev": {
+        "title": "EV-lader",
+        "description": "Optioneel. Slim laden laadt in de goedkoopste kwartieren (teruggeleverde zonnestroom telt tegen de terugleverprijs) vóór de klaar-om-tijd. Met een laadtoestandsensor van de auto en de capaciteit volgt de benodigde energie uit de doel-SoC; anders stel je 'EV te laden energie' in, die tijdens het laden aftelt.",
+        "data": {
+          "ev_switch_entity": "Laderschakelaar (aan = laden toegestaan)",
+          "ev_power_w": "Laadvermogen",
+          "ev_power_entity": "Laadvermogensensor (optioneel)",
+          "ev_connected_entity": "Auto-aangesloten-sensor (optioneel)",
+          "ev_soc_entity": "Laadtoestandsensor auto (optioneel)",
+          "ev_capacity_kwh": "Accucapaciteit auto (met SoC-sensor)"
+        }
       }
     },
     "error": {
       "entity_not_found": "Entiteit niet gevonden",
       "no_price_forecast": "Geen prijsverwachting gevonden in de attributen van deze sensor",
       "invalid_price_unit": "Gebruik prijzen in EUR/kWh, EUR/MWh of ct/kWh.",
-      "invalid_nordpool": "Kies een geldige Nord Pool-integratie en een marktgebied."
+      "invalid_nordpool": "Kies een geldige Nord Pool-integratie en een marktgebied.",
+      "hp_options": "De select heeft geen herkenbare Normal- en EVU/Block-opties.",
+      "hp_temps": "'Volledige bloktijd vanaf' moet boven de minimumtemperatuur liggen."
     }
   },
   "selector": {
@@ -219,6 +285,14 @@
           "force_discharge": "Geforceerd ontladen",
           "hold": "Accu vasthouden"
         }
+      },
+      "ev_mode": {
+        "name": "EV laden",
+        "state": {
+          "manual": "Handmatig (niet gestuurd)",
+          "smart": "Slim (goedkoopst vóór klaar-om)",
+          "now": "Nu"
+        }
       }
     },
     "switch": {
@@ -233,6 +307,9 @@
       },
       "price_estimates": {
         "name": "Plannen met geschatte prijzen"
+      },
+      "hp_control": {
+        "name": "Warmtepompsturing"
       }
     },
     "number": {
@@ -247,6 +324,12 @@
       },
       "arbitrage_margin": {
         "name": "Arbitragemarge"
+      },
+      "ev_energy": {
+        "name": "EV te laden energie"
+      },
+      "ev_target_soc": {
+        "name": "EV doel-SoC"
       }
     },
     "binary_sensor": {
@@ -299,6 +382,32 @@
       },
       "load_forecast_accuracy": {
         "name": "Nauwkeurigheid verbruiksvoorspelling (7 dagen)"
+      },
+      "heat_pump_mode": {
+        "name": "Warmtepompstand",
+        "state": {
+          "normal": "Normaal",
+          "block": "Geblokkeerd (EVU)",
+          "comfort": "Comfort",
+          "boost": "Boost",
+          "off": "Niet gestuurd"
+        }
+      },
+      "ev_charging": {
+        "name": "EV-laadstatus",
+        "state": {
+          "manual": "Handmatig",
+          "waiting": "Wacht op goedkoop kwartier",
+          "charging": "Laden",
+          "done": "Klaar",
+          "unavailable": "Lader niet beschikbaar",
+          "off": "Uit"
+        }
+      }
+    },
+    "time": {
+      "ev_ready_by": {
+        "name": "EV klaar om"
       }
     }
   },

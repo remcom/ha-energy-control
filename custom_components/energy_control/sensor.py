@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.components.sensor import (
@@ -139,6 +139,10 @@ async def async_setup_entry(
     data = entry.runtime_data
     entities: list[SensorEntity] = [PlanValueSensor(data, d) for d in SENSORS]
     entities.append(PlanSensor(data))
+    if data.coordinator.flex.hp_configured:
+        entities.append(HeatPumpSensor(data))
+    if data.coordinator.flex.ev_configured:
+        entities.append(EvSensor(data))
     async_add_entities(entities)
 
 
@@ -229,4 +233,67 @@ class PlanSensor(EnergyControlEntity, SensorEntity):
                 for s in plan.slots
             ],
             "error": self.coordinator.last_plan_error,
+        }
+
+
+class HeatPumpSensor(EnergyControlEntity, SensorEntity):
+    """Commanded SG Ready state, with why and what is planned next."""
+
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = ["normal", "block", "comfort", "boost", "off"]
+    _unrecorded_attributes = frozenset({"schedule"})
+
+    def __init__(self, data: EnergyControlData) -> None:
+        """Init."""
+        super().__init__(data, "heat_pump_mode")
+
+    @property
+    def native_value(self) -> str:
+        """Mode now (off = not controlled)."""
+        flex = self.coordinator.flex
+        return flex.hp_mode.value if flex.hp_active and flex.hp_mode else "off"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Status, block bookkeeping and the planned blocks."""
+        flex = self.coordinator.flex
+        now = dt_util.utcnow()
+        planned = sorted((start, mode) for start, mode in flex.hp_modes.items() if mode != "normal")
+        nxt = next(((start, mode) for start, mode in planned if start >= now), None)
+        return {
+            "status": flex.hp_status,
+            "blocked_today_h": round(flex.blocked_today_h(now), 2),
+            "next_change": nxt[0].isoformat() if nxt else None,
+            "next_mode": nxt[1].value if nxt else None,
+            "expected_power_kw": round(flex.hp_power(flex.temperature_at(now)), 3) if flex.hp_model else None,
+            "schedule": [{"start": start.isoformat(), "mode": mode.value} for start, mode in planned],
+        }
+
+
+class EvSensor(EnergyControlEntity, SensorEntity):
+    """EV charging status and next planned charge."""
+
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = ["manual", "waiting", "charging", "done", "unavailable", "off"]
+
+    def __init__(self, data: EnergyControlData) -> None:
+        """Init."""
+        super().__init__(data, "ev_charging")
+
+    @property
+    def native_value(self) -> str:
+        """Charging status."""
+        return self.coordinator.flex.ev_status
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Need, next charge quarter and ready-by."""
+        flex = self.coordinator.flex
+        now = dt_util.utcnow()
+        upcoming = sorted(s for s in flex.ev_slots if s >= now - timedelta(minutes=15))
+        return {
+            "energy_needed_kwh": round(flex.ev_need_kwh(), 2),
+            "next_charge": upcoming[0].isoformat() if upcoming else None,
+            "planned_quarters": len(upcoming),
+            "ready_by": flex.ev_ready_by.isoformat(),
         }
