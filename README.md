@@ -107,7 +107,23 @@ overnight. The plan therefore always looks 36 hours ahead, filling the gap with 
 1. **External forecast** (optional *External price forecast sensor*), for example
    [energyforecast.de](https://energyforecast.de) through the EPEX Spot integration. Its values are
    calibrated against the published prices: fitted directly on the overlap, otherwise treated as a
-   spot price and converted with your supplier's own spot → all-in relation.
+   spot price and converted with your supplier's own spot → all-in relation. The
+   [energyforecast.de REST sensor](https://energyforecast.de/integrations#home-assistant) works
+   directly (its `data` attribute with `price_ct_kwh` per quarter); add `&market_zone=NL` (or your
+   zone) to the resource URL and select the sensor:
+
+   ```yaml
+   rest:
+     - resource: "https://www.energyforecast.de/api/v2/forecast?token=YOUR_API_TOKEN&market_zone=NL"
+       scan_interval: 21600
+       timeout: 30
+       sensor:
+         - name: "Energyforecast Forecast"
+           unique_id: energyforecast_forecast
+           value_template: "{{ value_json.generated_at }}"
+           device_class: timestamp
+           json_attributes: [data, valid_until, plan]
+   ```
 2. **Built-in model**, learned from an archive of published prices (35 days, seeded from the price
    sensor's recorder history on first start):
    `price = typical price for this quarter (weekday/weekend, recency weighted)

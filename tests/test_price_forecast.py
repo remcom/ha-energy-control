@@ -109,3 +109,28 @@ def test_plan_money_excludes_estimated_quarters():
     assert plan.estimated_from == NOW + timedelta(hours=1)
     assert plan.baseline_cost == pytest.approx(4 * 0.4 * 0.30)  # load_kwh is energy per quarter
     assert plan.as_dict()["estimated_from"] is not None
+
+
+def test_energyforecast_de_rest_sensor():
+    """energyforecast.de REST sensor: attribute `data` with ct/kWh fields, no unit."""
+    from custom_components.energy_control.providers.prices import parse_price_attributes
+
+    start = datetime(2026, 11, 19, 23, 0, tzinfo=UTC)
+    rows = [
+        {
+            "start": (start + timedelta(minutes=15 * i)).isoformat(),
+            "end": (start + timedelta(minutes=15 * (i + 1))).isoformat(),
+            "price_ct_kwh": 8.0 + i * 0.1,
+            "total_ct_kwh": 30.0 + i * 0.12,
+        }
+        for i in range(16)
+    ]
+    attrs = {"data": rows, "valid_until": "2026-11-21T00:00:00Z", "plan": "free", "device_class": "timestamp"}
+    points = parse_price_attributes(attrs)
+    assert len(points) == 16 and points[0].minutes == 15
+    assert points[0].price == pytest.approx(0.08)  # raw market price, EUR/kWh
+    assert points[0].spot == pytest.approx(0.08)
+    # Without overlap the forecast is converted with the supplier's spot relation.
+    spot = [0.05 + 0.01 * i for i in range(12)]
+    published = _points([0.15 + 1.21 * s for s in spot], spot)
+    assert calibrate_external(points, published)(points[0].price) == pytest.approx(0.15 + 1.21 * 0.08)

@@ -21,6 +21,11 @@ from .util import parse_dt, to_float
 TIME_KEYS = ("start", "startsAt", "starts_at", "from", "time", "period_start", "start_time", "datetime")
 VALUE_KEYS = ("price", "value", "total", "price_total", "electricity_price", "price_per_kwh")
 SPOT_KEYS = ("energy", "spot", "energy_price", "market_price")
+# Keys that state their own unit (energyforecast.de): the entity's unit does not apply.
+# The raw market price comes first: an external forecast is calibrated against the
+# published all-in prices anyway, and without overlap it is treated as a spot price.
+CT_VALUE_KEYS = ("price_ct_kwh", "total_ct_kwh")
+CT_SPOT_KEYS = ("price_ct_kwh",)
 LIST_KEYS = (
     "prices_today",
     "prices_tomorrow",
@@ -154,9 +159,14 @@ def _parse_list(items: Iterable[Any], scale: float) -> list[PricePoint]:
             continue
         start = next((parse_dt(item[k]) for k in TIME_KEYS if k in item), None)
         value = next((to_float(item[k]) for k in VALUE_KEYS if k in item), None)
+        spot = next((to_float(item[k]) for k in SPOT_KEYS if k in item), None)
+        if value is None and (ct := next((to_float(item[k]) for k in CT_VALUE_KEYS if k in item), None)) is not None:
+            # ct/kWh: rescale to the entity's unit so the common scale below applies.
+            value = ct * 0.01 / scale
+            ct_spot = next((to_float(item[k]) for k in CT_SPOT_KEYS if k in item), None)
+            spot = ct_spot * 0.01 / scale if ct_spot is not None else spot
         if start is None or value is None:
             continue
-        spot = next((to_float(item[k]) for k in SPOT_KEYS if k in item), None)
         end = parse_dt(item.get("end") or item.get("endsAt") or item.get("till") or item.get("end_time"))
         raw.append((start, value, spot, end))
     raw.sort(key=lambda r: r[0])
