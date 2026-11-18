@@ -124,3 +124,45 @@ async def test_correction_requires_enough_coverage_and_is_bounded(hass, freezer)
     for row in h.records:
         row["load_coverage"] = 0.5
     assert h.recent_load_factor(now) == 1.0
+
+
+async def test_corrections_use_uncorrected_forecast(hass, freezer):
+    """A correction applied to the plan must not cancel its own measurement."""
+    freezer.move_to("2026-11-15T08:00:00+00:00")
+    now = dt_util.utcnow()
+    h = History(hass, "feedback")
+    h.records = [
+        {
+            "start": (now - timedelta(minutes=15 * i)).isoformat(),
+            "load_coverage": 1,
+            "actual_load_kw": 0.6,
+            "planned_load_kw": 0.6,  # already corrected upward
+            "planned_load_forecast_kw": 0.5,
+        }
+        for i in range(1, 21)
+    ]
+    assert h.recent_load_factor(now) == pytest.approx(1.2)
+
+
+async def test_pv_factor_last_hour_skips_curtailed_and_small(hass, freezer):
+    freezer.move_to("2026-11-15T12:00:00+00:00")
+    now = dt_util.utcnow()
+    h = History(hass, "pv")
+
+    def row(i, actual, forecast, **extra):
+        return {
+            "start": (now - timedelta(minutes=15 * i)).isoformat(),
+            "pv_coverage": 1,
+            "actual_pv_kw": actual,
+            "planned_pv_forecast_kw": forecast,
+            **extra,
+        }
+
+    h.records = [row(i, 1.0, 2.0) for i in range(1, 5)]
+    assert h.recent_pv_factor(now) == pytest.approx(0.5)
+    h.records = [row(i, 1.0, 2.0, curtailed=True) for i in range(1, 5)]
+    assert h.recent_pv_factor(now) == 1.0
+    h.records = [row(i, 0.01, 0.05) for i in range(1, 5)]  # dawn: too small to judge
+    assert h.recent_pv_factor(now) == 1.0
+    h.records = [row(i, 0.1, 2.0) for i in range(1, 5)]
+    assert h.recent_pv_factor(now) == 0.3  # bounded

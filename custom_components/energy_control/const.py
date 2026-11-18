@@ -27,6 +27,7 @@ CONF_EXPORT_FIXED: Final = "export_fixed"
 CONF_PV_ENTITIES: Final = "pv_entities"
 CONF_PV_ESTIMATE: Final = "pv_estimate"
 CONF_PV_SCALE: Final = "pv_scale"
+CONF_PV_PRODUCTION_ENTITIES: Final = "pv_production_entities"  # summed: all PV (AC + DC)
 # Battery
 CONF_SOC_ENTITY: Final = "soc_entity"
 CONF_CAPACITY_KWH: Final = "capacity_kwh"
@@ -129,7 +130,7 @@ DEFAULT_SETTINGS: Final[dict[str, object]] = {
 # --- Timing ------------------------------------------------------------------
 HORIZON_HOURS: Final = 48
 CONTROL_INTERVAL_S: Final = 10
-STALE_PLAN_MINUTES: Final = 45
+STALE_PLAN_MINUTES: Final = 20  # four missed replans: fall back to hold
 REPLAN_MINUTES: Final = 5  # periodic replan with live SoC
 LOAD_PROFILE_REFRESH_H: Final = 6
 HISTORY_DAYS: Final = 7

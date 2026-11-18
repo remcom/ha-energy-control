@@ -21,11 +21,12 @@
       },
       "pv": {
         "title": "Solar forecast",
-        "description": "Forecast sensors (Solcast day sensors, Forecast.Solar, Open-Meteo Solar Forecast). Values from all selected sensors are added up.",
+        "description": "Forecast sensors (Solcast day sensors, Forecast.Solar, Open-Meteo Solar Forecast). Values from all selected sensors are added up; Solcast's tomorrow and day 3 sensors are added automatically. Production sensors measure what all PV actually produces (for example AC-coupled inverter + MPPTs): used to correct the forecast for clouds and to report forecast accuracy.",
         "data": {
           "pv_entities": "PV forecast sensors",
           "pv_estimate": "Solcast estimate",
-          "pv_scale": "Scale factor"
+          "pv_scale": "Scale factor",
+          "pv_production_entities": "PV production power sensors (all arrays, summed)"
         }
       },
       "battery": {
@@ -112,11 +113,12 @@
       },
       "pv": {
         "title": "Solar forecast",
-        "description": "Forecast sensors (Solcast day sensors, Forecast.Solar, Open-Meteo Solar Forecast). Values from all selected sensors are added up.",
+        "description": "Forecast sensors (Solcast day sensors, Forecast.Solar, Open-Meteo Solar Forecast). Values from all selected sensors are added up; Solcast's tomorrow and day 3 sensors are added automatically. Production sensors measure what all PV actually produces (for example AC-coupled inverter + MPPTs): used to correct the forecast for clouds and to report forecast accuracy.",
         "data": {
           "pv_entities": "PV forecast sensors",
           "pv_estimate": "Solcast estimate",
-          "pv_scale": "Scale factor"
+          "pv_scale": "Scale factor",
+          "pv_production_entities": "PV production power sensors (all arrays, summed)"
         }
       },
       "battery": {

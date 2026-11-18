@@ -492,3 +492,24 @@ async def test_replans_every_five_minutes(hass: HomeAssistant, entry, setup, fre
     async_fire_time_changed(hass, target + timedelta(seconds=3))
     await hass.async_block_till_done()
     assert requests
+
+
+async def test_solcast_later_days_added_automatically(hass: HomeAssistant, entry, setup) -> None:
+    coordinator = entry.runtime_data.coordinator
+    coordinator.config["pv_entities"] = ["sensor.solcast_pv_forecast_forecast_today"]
+    _set(hass, "sensor.solcast_pv_forecast_forecast_today", "1.2")
+    _set(hass, "sensor.solcast_pv_forecast_forecast_tomorrow", "1.1")
+    assert coordinator.pv_forecast_entities() == [
+        "sensor.solcast_pv_forecast_forecast_today",
+        "sensor.solcast_pv_forecast_forecast_tomorrow",
+    ]
+
+
+async def test_pv_production_is_summed_and_unknown_when_partial(hass: HomeAssistant, entry, setup) -> None:
+    controller = entry.runtime_data.controller
+    controller.config["pv_production_entities"] = ["sensor.pv_ac", "sensor.pv_dc"]
+    _set(hass, "sensor.pv_ac", "800", unit_of_measurement="W")
+    _set(hass, "sensor.pv_dc", "1.2", unit_of_measurement="kW")
+    assert controller._pv_production() == 2000
+    _set(hass, "sensor.pv_dc", STATE_UNAVAILABLE)
+    assert controller._pv_production() is None

@@ -43,6 +43,7 @@ from ..const import (
     CONF_PV_LIMIT_MAX_W,
     CONF_PV_LIMIT_UNIT,
     CONF_PV_POWER_ENTITY,
+    CONF_PV_PRODUCTION_ENTITIES,
     CONF_SETPOINT_ENTITY,
     CONF_SOC_ENTITY,
     CONTROL_INTERVAL_S,
@@ -286,7 +287,7 @@ class VictronController:
             soc_pct=soc,
             curtailing=self.curtailing,
             load_w=self._load_power(),
-            pv_w=self._power(CONF_PV_POWER_ENTITY),
+            pv_w=self._pv_production(),
             import_kwh=self._energy(CONF_IMPORT_ENERGY_ENTITY),
             export_kwh=self._energy(CONF_EXPORT_ENERGY_ENTITY),
             meters_configured=bool(
@@ -326,6 +327,25 @@ class VictronController:
 
     def _load_power(self) -> float | None:
         return self._power(CONF_LOAD_ENTITY)
+
+    def _pv_production(self) -> float | None:
+        """Total PV power (W): the sum of all production sensors.
+
+        Falls back to the curtailable inverter's sensor. A partial sum would
+        look like clouds, so one missing sensor makes the total unknown.
+        """
+        entities = self.config.get(CONF_PV_PRODUCTION_ENTITIES) or []
+        if not entities:
+            return self._power(CONF_PV_POWER_ENTITY)
+        total = 0.0
+        for entity_id in entities:
+            state = self.hass.states.get(entity_id)
+            value = state_float(self.hass, entity_id)
+            unit = state.attributes.get("unit_of_measurement") if state else None
+            if state is None or value is None or unit not in ("W", "kW") or report_error(state):
+                return None
+            total += value  # state_float already converts kW to W
+        return total
 
     # --- decision ----------------------------------------------------------
     def _limits(self) -> Limits:

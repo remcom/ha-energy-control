@@ -52,6 +52,7 @@ from .const import (
     CONF_PV_LIMIT_MAX_W,
     CONF_PV_LIMIT_UNIT,
     CONF_PV_POWER_ENTITY,
+    CONF_PV_PRODUCTION_ENTITIES,
     CONF_PV_SCALE,
     CONF_SETPOINT_ENTITY,
     CONF_SOC_ENTITY,
@@ -180,6 +181,7 @@ def step_schema(step: str, values: dict[str, Any]) -> vol.Schema:
                     ["pv_estimate", "pv_estimate10", "pv_estimate90"], "pv_estimate"
                 ),
                 _req(CONF_PV_SCALE, values): _num(0, 3, 0.01),
+                _opt(CONF_PV_PRODUCTION_ENTITIES, values): _entity("sensor", multiple=True),
             }
         )
     if step == "battery":

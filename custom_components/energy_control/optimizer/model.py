@@ -28,6 +28,11 @@ class SlotInput:
     pv_kwh: float
     load_kwh: float
     export_price_known: bool = True
+    # Uncorrected forecasts (before live/recent corrections): what forecast
+    # quality and the correction factors are measured against.
+    pv_forecast_kwh: float | None = None
+    load_forecast_kwh: float | None = None
+    price_estimated: bool = False  # price is a prediction, not a published price
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +91,9 @@ class SlotPlan:
     reason: str = ""
     export_price_known: bool = True
     grid_violation_kw: float = 0.0  # unavoidable import above configured limit
+    pv_forecast_kw: float | None = None
+    load_forecast_kw: float | None = None
+    price_estimated: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         """Serialize to JSON-friendly dict."""

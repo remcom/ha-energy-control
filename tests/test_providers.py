@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from custom_components.energy_control.optimizer import SlotInput
 from custom_components.energy_control.providers.load import LoadProfile, build_load_profile
 from custom_components.energy_control.providers.prices import (
     ExportMode,
@@ -18,7 +19,7 @@ from custom_components.energy_control.providers.prices import (
     price_at,
     unit_scale,
 )
-from custom_components.energy_control.providers.slots import build_slots
+from custom_components.energy_control.providers.slots import Corrections, apply_corrections, build_slots
 from custom_components.energy_control.providers.solar import (
     energy_between,
     parse_pv_attributes,
@@ -113,6 +114,33 @@ def test_load_profile():
     assert profile.at(datetime(2026, 11, 11, 17, 30, tzinfo=AMS)) == 1.5
     assert profile.at(datetime(2026, 11, 15, 17, 30, tzinfo=AMS)) == 5.0
     assert profile.at(datetime(2026, 11, 11, 3, 0, tzinfo=AMS)) == pytest.approx(8 / 3)
+
+
+def test_load_profile_trims_one_off_peaks():
+    # Ten weekday 18:00 samples, one with an EV session.
+    samples = [(datetime(2026, 11, 2 + d + (2 if d >= 5 else 0), 18, 0, tzinfo=AMS), 0.5) for d in range(10)]
+    samples[3] = (samples[3][0], 11.0)
+    profile = build_load_profile(samples, AMS)
+    assert profile.at(datetime(2026, 11, 18, 18, 0, tzinfo=AMS)) == pytest.approx(0.5)
+
+
+def test_corrections_live_running_slot_and_decay():
+    now = datetime(2026, 11, 14, 12, 5, tzinfo=AMS)
+    slots = [SlotInput(now + timedelta(minutes=15 * i - (5 if i else 0)), 0.25, 0.3, 0.3, 0.5, 0.1) for i in range(20)]
+    slots[0] = SlotInput(now, 10 / 60, 0.3, 0.3, 0.5 * 2 / 3, 0.1 * 2 / 3)
+    out = apply_corrections(slots, now, Corrections(pv_factor=0.5, live_pv_kw=0.4, live_load_kw=1.2))
+    assert out[0].pv_kwh == pytest.approx(0.4 * 10 / 60)  # live replaces the forecast
+    assert out[0].load_kwh == pytest.approx(1.2 * 10 / 60)
+    assert 0.1 < out[1].load_kwh / 0.25 < 1.2  # next slot: half live, half forecast
+    assert out[4].pv_kwh < 0.5  # factor still applies an hour ahead
+    assert out[-1].pv_kwh == pytest.approx(0.5)  # faded out after 3 h
+    assert [s.pv_forecast_kwh for s in out] == [s.pv_forecast_kwh for s in slots]
+
+
+def test_corrections_no_live_pv_when_forecast_dark():
+    now = datetime(2026, 11, 14, 17, 0, tzinfo=AMS)
+    slot = SlotInput(now, 0.25, 0.3, 0.3, 0.0, 0.1)
+    assert apply_corrections([slot], now, Corrections(live_pv_kw=0.2))[0].pv_kwh == 0.0
 
 
 def test_build_slots_partial_first_slot():

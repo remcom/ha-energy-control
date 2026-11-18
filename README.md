@@ -1,7 +1,7 @@
 # Energy Control
 
 A local, cost-optimizing battery scheduler for Home Assistant — a self-hosted alternative to
-Victron VRM Dynamic ESS. Every 15 minutes it plans the next 24–48 h from dynamic prices, solar
+Victron VRM Dynamic ESS. Every 5 minutes it plans the next 24–48 h from dynamic prices, solar
 forecast and your own consumption history, executes the plan on a Victron ESS and can curtail an
 AC-coupled PV inverter when export prices go negative.
 
@@ -88,17 +88,29 @@ grid power. Counter resets and unavailable meters create missing coverage. Short
 a quarter boundary are allocated proportionally; long gaps are not assigned to a tariff by guessing.
 Without meters, power samples estimate observed energy and can miss fast changes between samples.
 
-Household power and PV measurements are recorded with coverage and forecast errors. After at least
-20 quarters with 95% load coverage in the last 12 hours, the next two forecast hours receive a
-correction bounded to ±20%, fading to zero. Energy-only household sensors still support recorder
-profiles but do not supply instantaneous load-error feedback. Savings remain forecasts, not measured
-savings claims.
+Household power and PV measurements are recorded with coverage and forecast errors. Corrections
+always compare measurements with the *uncorrected* forecast, so a correction never cancels itself:
+
+- **Running quarter**: the live average load and PV replace the forecast; the next quarter gets half.
+- **Load**: after at least 20 quarters with 95% coverage in the last 12 hours, the next two hours
+  receive a correction bounded to ±20%, fading to zero.
+- **PV**: the last hour's actual/forecast ratio (bounded 0.3–1.7, ignoring dawn/dusk and curtailed
+  quarters) corrects the next three hours, fading to zero. Select all production sensors (for
+  example an AC-coupled inverter and the MPPTs) under *PV production power sensors*; without them
+  the curtailable inverter's sensor is used.
+- **Load profile**: a trimmed mean per hour (highest and lowest 10% of days dropped), so a one-off
+  EV session or defrost does not raise that hour for weeks.
+
+Solcast's `forecast_tomorrow` and `forecast_day_3` sensors are added automatically when
+`forecast_today` is configured. Energy-only household sensors still support recorder profiles but
+do not supply instantaneous load-error feedback. Savings remain forecasts, not measured savings
+claims.
 
 ### How actions map to the ESS
 
 | Action | ESS writes |
 |---|---|
-| Self consumption | setpoint = idle setpoint; automatic slots cap charge/discharge at planned power; manual self consumption uses original limits within the live SoC window |
+| Self consumption | setpoint = idle setpoint with the original limits, so the battery absorbs forecast errors (extra PV, load spikes); only when the plan deliberately exports part of the surplus or imports part of the load is that direction capped at planned power; always within the live SoC window |
 | Hold | max inverter power = 0 (grid covers load); charging blocked only when the plan exports PV on purpose. Used whenever the plan keeps the battery idle while importing: stored energy is worth more later, or the SoC is at the minimum |
 | Charge from grid | setpoint = max import, max charge power = planned charge power |
 | Discharge to grid | setpoint = −max export, max inverter power = planned discharge power |

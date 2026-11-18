@@ -247,18 +247,45 @@ class History:
         return self.observed_cost_since(start)
 
     def recent_load_factor(self, now: datetime) -> float:
-        """Bounded correction after at least 20 well-observed quarters."""
+        """Bounded load correction after at least 20 well-observed quarters (12 h)."""
+        ratio = self._ratio(now - timedelta(hours=12), "load", min_rows=20, min_kw=0.05)
+        return 1.0 if ratio is None else max(0.8, min(1.2, ratio))
+
+    def recent_pv_factor(self, now: datetime) -> float:
+        """Bounded PV correction from the last hour (clouds the forecast missed).
+
+        Needs a meaningful forecast in that hour: dawn, dusk and night readings
+        are too small to give a reliable ratio. Curtailed quarters are skipped.
+        """
+        ratio = self._ratio(now - timedelta(hours=1), "pv", min_rows=3, min_kw=0.1, min_total_kw=0.6)
+        return 1.0 if ratio is None else max(0.3, min(1.7, ratio))
+
+    def _ratio(
+        self, start: datetime, kind: str, *, min_rows: int, min_kw: float, min_total_kw: float = 0.0
+    ) -> float | None:
+        """Actual / uncorrected forecast over well-observed quarters since `start`."""
         rows = [
-            r
-            for r in self.since(now - timedelta(hours=12))
-            if r.get("load_coverage", 0) >= 0.95
-            and r.get("actual_load_kw") is not None
-            and r.get("planned_load_kw", 0) > 0.05
+            (r[f"actual_{kind}_kw"], forecast)
+            for r in self.since(start)
+            if r.get(f"{kind}_coverage", 0) >= 0.95
+            and r.get(f"actual_{kind}_kw") is not None
+            and not (kind == "pv" and r.get("curtailed"))
+            and (forecast := _forecast_kw(r, kind)) is not None
+            and forecast > min_kw
         ]
-        if len(rows) < 20:
-            return 1.0
-        ratio = sum(r["actual_load_kw"] for r in rows) / sum(r["planned_load_kw"] for r in rows)
-        return max(0.8, min(1.2, ratio))
+        total = sum(f for _, f in rows)
+        if len(rows) < min_rows or total <= min_total_kw:
+            return None
+        return sum(a for a, _ in rows) / total
+
+    def live_average(self, now: datetime) -> tuple[float | None, float | None]:
+        """Average (load kW, PV kW) of the running slot after at least 60 s."""
+        acc = self._acc
+        if acc is None or acc.start != floor_slot(now):
+            return None, None
+        load = acc.load_ws / acc.load_samples / 1000 if acc.load_samples >= 60 else None
+        pv = acc.pv_ws / acc.pv_samples / 1000 if acc.pv_samples >= 60 else None
+        return load, pv
 
     def planned_cost_since(self, start: datetime) -> float:
         """Planned cost (EUR) of closed slots since `start`."""
@@ -274,12 +301,20 @@ def _planned_snapshot(slot: SlotPlan | None) -> dict[str, Any] | None:
         "grid_kw": round(slot.grid_kw, 3),
         "load_kw": round(slot.load_kw, 3),
         "pv_kw": round(slot.pv_kw, 3),
+        "pv_forecast_kw": None if slot.pv_forecast_kw is None else round(slot.pv_forecast_kw, 3),
+        "load_forecast_kw": None if slot.load_forecast_kw is None else round(slot.load_forecast_kw, 3),
         "export_price_known": slot.export_price_known,
         "soc": round(slot.soc_end_pct, 2),
         "cost": round(slot.cost / slot.hours * SLOT_MINUTES / 60, 5) if slot.hours else 0.0,
         "import_price": round(slot.import_price, 5),
         "export_price": round(slot.export_price, 5),
     }
+
+
+def _forecast_kw(record: dict[str, Any], kind: str) -> float | None:
+    """Uncorrected forecast of a record; older records only have the corrected one."""
+    value = record.get(f"planned_{kind}_forecast_kw")
+    return value if value is not None else record.get(f"planned_{kind}_kw")
 
 
 def _round(value: float | None, digits: int = 3) -> float | None:

@@ -42,6 +42,7 @@ class PricePoint:
     minutes: int
     price: float  # as published by the source (scaled to EUR/kWh)
     spot: float | None = None  # energy/spot part if the source provides it
+    estimated: bool = False  # predicted, not (yet) published
 
     def __post_init__(self) -> None:
         if (

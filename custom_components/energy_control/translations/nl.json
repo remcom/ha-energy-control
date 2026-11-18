@@ -21,11 +21,12 @@
       },
       "pv": {
         "title": "Zonneverwachting",
-        "description": "Verwachtingssensoren (Solcast dagsensoren, Forecast.Solar, Open-Meteo Solar Forecast). Alle geselecteerde sensoren worden opgeteld.",
+        "description": "Voorspellingssensoren (Solcast dagsensoren, Forecast.Solar, Open-Meteo Solar Forecast). Waarden van alle gekozen sensoren worden opgeteld; de Solcast-sensoren voor morgen en dag 3 worden automatisch toegevoegd. Productiesensoren meten wat alle panelen werkelijk opwekken (bijvoorbeeld AC-omvormer + MPPT's): gebruikt om de voorspelling bij te sturen bij bewolking en om de nauwkeurigheid te tonen.",
         "data": {
           "pv_entities": "PV-verwachting sensoren",
           "pv_estimate": "Solcast schatting",
-          "pv_scale": "Schaalfactor"
+          "pv_scale": "Schaalfactor",
+          "pv_production_entities": "PV-productie vermogenssensoren (alle panelen, opgeteld)"
         }
       },
       "battery": {
@@ -112,11 +113,12 @@
       },
       "pv": {
         "title": "Zonneverwachting",
-        "description": "Verwachtingssensoren (Solcast dagsensoren, Forecast.Solar, Open-Meteo Solar Forecast). Alle geselecteerde sensoren worden opgeteld.",
+        "description": "Voorspellingssensoren (Solcast dagsensoren, Forecast.Solar, Open-Meteo Solar Forecast). Waarden van alle gekozen sensoren worden opgeteld; de Solcast-sensoren voor morgen en dag 3 worden automatisch toegevoegd. Productiesensoren meten wat alle panelen werkelijk opwekken (bijvoorbeeld AC-omvormer + MPPT's): gebruikt om de voorspelling bij te sturen bij bewolking en om de nauwkeurigheid te tonen.",
         "data": {
           "pv_entities": "PV-verwachting sensoren",
           "pv_estimate": "Solcast schatting",
-          "pv_scale": "Schaalfactor"
+          "pv_scale": "Schaalfactor",
+          "pv_production_entities": "PV-productie vermogenssensoren (alle panelen, opgeteld)"
         }
       },
       "battery": {

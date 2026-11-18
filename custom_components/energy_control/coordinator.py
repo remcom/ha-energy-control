@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from functools import partial
 from typing import TYPE_CHECKING, Any
@@ -64,7 +64,7 @@ from .optimizer import Action, BatteryParams, GridParams, Plan, Strategy, optimi
 from .providers.load import LoadProfile, build_load_profile
 from .providers.nordpool import NordPoolForecast
 from .providers.prices import ExportMode, PriceModel, PricePoint, parse_price_attributes
-from .providers.slots import build_slots
+from .providers.slots import Corrections, apply_corrections, build_slots
 from .providers.solar import EnergyInterval, parse_pv_attributes
 from .providers.telemetry import soc_reading
 from .providers.util import to_float
@@ -135,6 +135,7 @@ class EnergyControlCoordinator(DataUpdateCoordinator[Plan]):
         )
         self.soc_pct: float | None = None
         self.last_plan_error: str | None = None
+        self.corrections = Corrections()
 
     # --- lifecycle ---------------------------------------------------------
     async def async_setup(self) -> None:
@@ -150,7 +151,7 @@ class EnergyControlCoordinator(DataUpdateCoordinator[Plan]):
                 self.hass, self._on_slot_boundary, minute=list(range(0, 60, REPLAN_MINUTES)), second=3
             )
         )
-        watched = [e for e in [self.config.get(CONF_PRICE_ENTITY), *self.config.get(CONF_PV_ENTITIES, [])] if e]
+        watched = [e for e in [self.config.get(CONF_PRICE_ENTITY), *self.pv_forecast_entities()] if e]
         self.config_entry.async_on_unload(async_track_state_change_event(self.hass, watched, self._on_input_changed))
 
     @callback
@@ -246,9 +247,26 @@ class EnergyControlCoordinator(DataUpdateCoordinator[Plan]):
             return []
         return parse_price_attributes(state.attributes, state.attributes.get("unit_of_measurement"))
 
+    def pv_forecast_entities(self) -> list[str]:
+        """Configured forecast sensors plus Solcast's later-day siblings.
+
+        Solcast publishes one sensor per day; configuring only "today" would
+        leave every plan past midnight without solar.
+        """
+        configured = list(self.config.get(CONF_PV_ENTITIES) or [])
+        result = list(configured)
+        for entity_id in configured:
+            if entity_id.endswith("_forecast_today"):
+                base = entity_id.removesuffix("_today")
+                for suffix in ("_tomorrow", "_day_3"):
+                    sibling = base + suffix
+                    if sibling not in result and self.hass.states.get(sibling) is not None:
+                        result.append(sibling)
+        return result
+
     def _read_pv(self) -> list[EnergyInterval]:
         intervals: list[EnergyInterval] = []
-        for entity_id in self.config.get(CONF_PV_ENTITIES) or []:
+        for entity_id in self.pv_forecast_entities():
             state = self.hass.states.get(entity_id)
             if state is not None:
                 intervals.extend(parse_pv_attributes(state.attributes, self.config[CONF_PV_ESTIMATE]))
@@ -356,15 +374,14 @@ class EnergyControlCoordinator(DataUpdateCoordinator[Plan]):
             raise UpdateFailed("Price forecast does not cover the current time")
 
         if self.history:
-            correction = self.history.recent_load_factor(now)
-            slots = [
-                replace(
-                    slot,
-                    load_kwh=slot.load_kwh
-                    * (1 + (correction - 1) * max(0, 1 - (slot.start - now).total_seconds() / 7200)),
-                )
-                for slot in slots
-            ]
+            load_kw, pv_kw = self.history.live_average(now)
+            self.corrections = Corrections(
+                load_factor=self.history.recent_load_factor(now),
+                pv_factor=self.history.recent_pv_factor(now),
+                live_load_kw=load_kw,
+                live_pv_kw=pv_kw,
+            )
+            slots = apply_corrections(slots, now, self.corrections)
         model = self.price_model()
         missing_spot = model.includes_taxes and any(p.spot is None for p in self.prices)
         transition_soon = model.netting_end and model.netting_end <= now.astimezone(tz).date() + timedelta(days=60)
