@@ -32,6 +32,7 @@ from ..const import (
     CONF_EXPORT_ENERGY_ENTITY,
     CONF_FEED_IN_LIMIT_ENTITY,
     CONF_GRID_POWER_ENTITY,
+    CONF_HP_POWER_ENTITY,
     CONF_IDLE_SETPOINT_W,
     CONF_IMPORT_ENERGY_ENTITY,
     CONF_LOAD_ENTITY,
@@ -295,6 +296,7 @@ class VictronController:
             curtailing=self.curtailing,
             load_w=self._load_power(),
             pv_w=self._pv_production(),
+            hp_w=self._power(CONF_HP_POWER_ENTITY),
             import_kwh=self._energy(CONF_IMPORT_ENERGY_ENTITY),
             export_kwh=self._energy(CONF_EXPORT_ENERGY_ENTITY),
             meters_configured=bool(

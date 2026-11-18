@@ -90,6 +90,7 @@ class FlexibleLoads:
         # Heat pump model: power (kW) = a + b * max(0, 18 - T_outdoor)
         self.hp_model: HeatPumpModel | None = None
         self.hp_modes: dict[datetime, HpMode] = {}
+        self.hp_kw: dict[datetime, float] = {}  # expected power per slot start (dashboard)
         self.ev_slots: set[datetime] = set()
         self.hp_mode: HpMode | None = None  # what we last commanded
         self.hp_status = "off"
@@ -194,8 +195,10 @@ class FlexibleLoads:
         if not self.hp_configured or self.hp_model is None:
             return slots
         out = []
+        self.hp_kw = {}
         for s in slots:
             kwh = self.hp_power(s.start) * s.hours
+            self.hp_kw[s.start] = kwh / s.hours if s.hours else 0.0
             out.append(
                 replace(
                     s,
@@ -226,6 +229,7 @@ class FlexibleLoads:
             energy = load_with_heat_pump(hp_slots, modes, params)
             for i, s in enumerate(hp_slots):
                 delta[i] += energy[i] - s.power_kw * s.plan.hours
+                self.hp_kw[s.plan.start] = energy[i] / s.plan.hours if s.plan.hours else 0.0
             changed = any(m != HpMode.NORMAL for m in modes)
         if self.ev_configured and (need := self.ev_need_kwh()) > 0 and self._ev_plugged():
             mode = self.ev_mode
@@ -249,10 +253,14 @@ class FlexibleLoads:
     def annotate(self, plan: Plan) -> None:
         """Attach the heat pump mode and EV power to the plan slots (dashboard)."""
         power = float(self.config.get(CONF_EV_POWER_W) or 0) / 1000
+        outdoor = bool(self.config.get(CONF_OUTDOOR_TEMP_ENTITY)) or bool(self.coordinator.price_archive.temperature)
         for slot in plan.slots:
             mode = self.hp_modes.get(slot.start)
             slot.hp_mode = str(mode) if mode is not None else None
             slot.ev_kw = power if slot.start in self.ev_slots else 0.0
+            # The first slot starts at "now": look it up by its quarter.
+            slot.hp_kw = self.hp_kw.get(slot.start, self.hp_kw.get(floor_slot(slot.start), 0.0))
+            slot.outdoor_c = self.temperature_at(slot.start) if outdoor else None
 
     # --- heat pump state -------------------------------------------------------
     def _hp_enabled(self) -> bool:

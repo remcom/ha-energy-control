@@ -2,7 +2,7 @@
  * Energy Control card — plan timeline, planned vs actual, summary.
  * Dependency-free web component; data via websocket `energy_control/subscribe`.
  */
-const CARD_VERSION = "0.4.0";
+const CARD_VERSION = "0.5.0";
 
 // What the battery does in a slot: the plan action, with self consumption
 // split by direction so "battery covers the house" is visible at a glance.
@@ -18,6 +18,13 @@ const kindOf = (action, batteryKw) => {
   if (action !== "self_consume") return KINDS[action] ? action : "idle";
   if (batteryKw == null || Math.abs(batteryKw) < 1e-3) return "idle";
   return batteryKw < 0 ? "cover" : "store";
+};
+// Usage view colours.
+const U = {
+  base: "var(--ec-base, #6b8fc7)",
+  hp: "var(--ec-hp, #e07a3f)",
+  ev: "var(--ec-ev, #8e6cbf)",
+  temp: "var(--ec-temp, #2aa198)",
 };
 const C = {
   pv: "var(--ec-pv, #e0a800)",
@@ -42,7 +49,7 @@ const ct = (eur) => (eur == null ? "–" : `${(eur * 100).toFixed(1)} ct`);
 const eur = (v) => (v == null ? "–" : `€ ${v.toFixed(2)}`);
 const kw = (v) => (v == null ? "–" : `${v.toFixed(2)} kW`);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
-const TABS = ["timeline", "schedule", "history", "summary"];
+const TABS = ["timeline", "usage", "schedule", "history", "summary"];
 const MINUS = "\u2212";
 /** Number with a real minus sign; `+` only when asked. */
 const numS = (v, d = 1, plus = false) => {
@@ -178,19 +185,21 @@ class EnergyControlCard extends HTMLElement {
     if (this._error) body = `<div class="msg err">${esc(this._error)}</div>`;
     else if (!d) body = `<div class="msg">Loading…</div>`;
     else if (this._tab === "timeline") body = this._timelineView(d);
+    else if (this._tab === "usage") body = this._usageView(d);
     else if (this._tab === "schedule") body = this._scheduleView(d);
     else if (this._tab === "history") body = this._historyView(d);
     else body = this._summaryView(d);
 
     const tabs = [
       ["timeline", "Timeline"],
+      ["usage", "Usage"],
       ["schedule", "Schedule"],
       ["history", "History"],
       ["summary", "Summary"],
     ]
       .map(([k, l]) => `<button class="tab ${this._tab === k ? "on" : ""}" data-tab="${k}">${l}</button>`)
       .join("");
-    const controls = this._tab === "timeline" ? this._controls() : "";
+    const controls = ["timeline", "usage"].includes(this._tab) ? this._controls() : "";
 
     this.shadowRoot.innerHTML = `
       <style>${STYLE}</style>
@@ -438,6 +447,149 @@ class EnergyControlCard extends HTMLElement {
           ["var(--success-color, #2e9e5b)", "▼ cheapest / ▲ dearest", "none"],
         ]),
     );
+  }
+
+  // ------------------------------------------------------------ usage view
+  /**
+   * Consumption: base load, heat pump and EV stacked. Left of "now" what was
+   * measured (with the plan's forecast dashed), right of it the prediction
+   * the battery plan uses. Outdoor temperature on the right axis.
+   */
+  _usageView(d) {
+    const now = Date.now();
+    const SLOT = 15 * 60e3;
+    const t0 = now - this._pastHours * 3600e3;
+    const past = (d.history ?? [])
+      .map((r) => ({ ...r, t: new Date(r.start).getTime() }))
+      .filter((r) => r.t >= t0 && r.t < now)
+      .map((r) => {
+        const total = r.actual_load_kw;
+        const hp = total != null && r.actual_hp_kw != null ? Math.min(total, r.actual_hp_kw) : null;
+        return { ...r, t1: r.t + SLOT, total, hp, base: total != null ? total - (hp ?? 0) : null };
+      });
+    const pastEnd = past.length ? past[past.length - 1].t1 : -Infinity;
+    const planSlots = (d.plan?.slots ?? []).map((s) => ({ ...s, t: new Date(s.start).getTime() }));
+    const last = planSlots[planSlots.length - 1];
+    const planEnd = last ? last.t + last.hours * 3600e3 : now;
+    const tEnd = Math.max(now + 3600e3, Math.min(planEnd, now + this._hours * 3600e3));
+    const future = planSlots
+      .map((s) => {
+        const ev = s.ev_kw ?? 0;
+        const hp = Math.min(s.hp_kw ?? 0, Math.max(0, s.load_kw - ev));
+        return { ...s, t1: s.t + s.hours * 3600e3, ev, hp, base: Math.max(0, s.load_kw - hp - ev), total: s.load_kw };
+      })
+      .filter((s) => s.t1 > Math.max(pastEnd, t0) && s.t < tEnd)
+      .map((s) => ({ ...s, t: Math.max(s.t, pastEnd, t0) }));
+    if (!past.length && !future.length) return `<div class="msg">No plan${d.last_error ? `: ${esc(d.last_error)}` : ""}</div>`;
+
+    const { W, x, pxPerHour } = this._frame(t0, tEnd);
+    const g = new Svg(W);
+    const a = new Svg(AXIS_W);
+    const ar = new Svg(AXIS_R);
+    const nowX = x(now);
+    this._nowX = nowX;
+    if (nowX > 150) g.text(nowX - 6, 13, "◀ measured", "era", "end");
+    g.text(nowX + 6, 13, "predicted ▶", "era");
+
+    const uY = 44, uH = 240;
+    const tops = [...past.flatMap((r) => [r.total, r.planned_load_kw]), ...future.map((s) => s.total)].filter((v) => v != null);
+    const [uMin, uMax] = niceRange(0, Math.max(0.5, ...tops), 0.06);
+    const uy = (v) => uY + uH - ((v - uMin) / (uMax - uMin)) * uH;
+    g.paneGrid(uy, [uMin, uMax], W);
+    a.paneAxis(uy, [uMin, uMax], "Usage", "kW");
+    const stack = (rows, op) => {
+      for (const r of rows) {
+        if (r.total == null) continue;
+        // +0.6 px overlap: adjacent quarters render without anti-aliasing seams.
+        const x0 = x(r.t), w = Math.max(0.5, x(r.t1) - x0) + 0.6;
+        let level = 0;
+        for (const [v, c] of [[r.base, U.base], [r.hp, U.hp], [r.ev, U.ev]]) {
+          if (!v || v <= 0) continue;
+          g.rect(x0, uy(level + v), w, uy(level) - uy(level + v), c, op);
+          level += v;
+        }
+      }
+    };
+    stack(past, 0.45);
+    stack(future, 0.8);
+    g.path(stepLine(past, "planned_load_kw", x, uy), C.load, { width: 1.4, dash: "4 3" });
+    g.path(stepLine(past, "total", x, uy), C.actual, { width: 2 });
+
+    // Outdoor temperature (right axis), future only: it drives the heat pump.
+    const temps = future.filter((s) => s.outdoor_c != null);
+    if (temps.length) {
+      const tv = temps.map((s) => s.outdoor_c);
+      const [tMin, tMax] = niceRange(Math.min(...tv) - 1, Math.max(...tv) + 1);
+      const ty = (v) => uY + uH - ((v - tMin) / (tMax - tMin)) * uH;
+      ar.paneAxisRange(ty, [tMin, tMax], "Out", "°C", "temp");
+      g.path(temps.flatMap((s) => [x(s.t), ty(s.outdoor_c), x(s.t1), ty(s.outdoor_c)]), U.temp, { width: 1.6 });
+    }
+
+    const bottom = uY + uH + 18;
+    g.timeAxis(x, t0, tEnd, bottom, uY + uH, pxPerHour);
+    g.nowLine(nowX, 20, uY + uH);
+    g.height = a.height = ar.height = bottom + 4;
+    this._hoverGeom = { x };
+    const kw2 = (v) => (v == null ? "–" : kwS(v));
+    this._hoverRows = [
+      ...past.map((r) => ({
+        t: r.t,
+        t1: r.t1,
+        html: `<b>${fmtDay(new Date(r.t))} ${fmtTime(new Date(r.t))}</b> <span class="muted">measured</span>
+          <span>Total <b>${kw2(r.total)}</b> <span class="muted">forecast ${kw2(r.planned_load_kw)}</span></span>
+          <span>Base <b>${kw2(r.base)}</b></span>${r.hp != null ? `<span>Heat pump <b>${kw2(r.hp)}</b></span>` : ""}`,
+      })),
+      ...future.map((s) => ({
+        t: s.t,
+        t1: s.t1,
+        html: `<b>${fmtDay(new Date(s.t))} ${fmtTime(new Date(s.t))}</b> <span class="muted">predicted</span>
+          <span>Total <b>${kw2(s.total)}</b></span><span>Base <b>${kw2(s.base)}</b></span>
+          ${d.has_heat_pump ? `<span>Heat pump <b>${kw2(s.hp)}</b>${s.hp_mode && s.hp_mode !== "normal" ? ` <span class="muted">${esc(s.hp_mode)}</span>` : ""}</span>` : ""}
+          ${s.ev > 0 ? `<span>EV <b>${kw2(s.ev)}</b></span>` : ""}
+          ${s.outdoor_c != null ? `<span>Outdoor <b>${s.outdoor_c.toFixed(1)} °C</b></span>` : ""}`,
+      })),
+    ];
+    this._readoutDefault = this._hoverRows.find((r) => r.t <= now && now < r.t1)?.html ?? `<span class="muted">Hover the chart for details</span>`;
+
+    const legend = legendHtml([
+      [U.base, "Base load"],
+      ...(d.has_heat_pump ? [[U.hp, "Heat pump"]] : []),
+      ...(d.has_ev ? [[U.ev, "EV"]] : []),
+      [C.actual, "Measured total", "line"],
+      [C.load, "Forecast (past)", "dash"],
+      ...(temps.length ? [[U.temp, "Outdoor temperature", "line"]] : []),
+    ]);
+    return this._chart(g, a, ar, legend) + this._usageTotals(d, past, future, now);
+  }
+
+  /** kWh: predicted next 24 h, measured last 24 h, forecast accuracy. */
+  _usageTotals(d, past, future, now) {
+    const kwh = (rows, key, from, to) =>
+      rows.reduce((sum, r) => {
+        const overlap = Math.max(0, Math.min(r.t1, to) - Math.max(r.t, from)) / 3600e3;
+        return sum + (r[key] ?? 0) * overlap;
+      }, 0);
+    const next = [now, now + 24 * 3600e3];
+    const prev = [now - 24 * 3600e3, now];
+    const pastAll = (d.history ?? []).map((r) => {
+      const t = new Date(r.start).getTime();
+      const total = r.actual_load_kw;
+      const hp = total != null && r.actual_hp_kw != null ? Math.min(total, r.actual_hp_kw) : null;
+      return { t, t1: t + 15 * 60e3, total, hp, base: total != null ? total - (hp ?? 0) : null };
+    });
+    const f = (v) => `${v.toFixed(1)}<span class="u">kWh</span>`;
+    const rows = [
+      ["Base load", kwh(future, "base", ...next), kwh(pastAll, "base", ...prev)],
+      ...(d.has_heat_pump ? [["Heat pump", kwh(future, "hp", ...next), kwh(pastAll, "hp", ...prev)]] : []),
+      ...(d.has_ev ? [["EV", kwh(future, "ev", ...next), null]] : []),
+      ["Total", kwh(future, "total", ...next), kwh(pastAll, "total", ...prev)],
+    ];
+    const acc = (a) => (a ? `${a.accuracy.toFixed(0)}% <span class="muted">(actual/forecast ${a.bias?.toFixed(2) ?? "–"})</span>` : "not enough data yet");
+    return `<div class="tscroll"><table class="dt">
+      <thead><tr><th></th><th class="n">Next 24 h (predicted)</th><th class="n">Last 24 h (measured)</th></tr></thead>
+      <tbody>${rows.map(([l, n, p], i) => `<tr${i === rows.length - 1 ? ' class="tot"' : ""}><td>${l}</td><td class="n">${f(n)}</td><td class="n">${p == null ? "–" : f(p)}</td></tr>`).join("")}</tbody>
+    </table></div>
+    <div class="note">Forecast accuracy (7 days): consumption ${acc(d.accuracy?.load)} · PV ${acc(d.accuracy?.pv)}</div>`;
   }
 
   /** Readout for a past slot: plan next to actual. */
@@ -808,6 +960,12 @@ class Svg {
     }
     flush();
   }
+  /** Right axis for any range (class sets the colour). */
+  paneAxisRange(yf, [min, max], title, unit, cls) {
+    this.text(6, yf(max) - 20, title, `pane ${cls}`);
+    this.text(6, yf(max) - 9, unit, `lbl unit ${cls}`);
+    for (const v of niceTicks(min, max, 4)) this.text(6, yf(v) + 4, `${+v.toFixed(1)}`, `lbl ${cls}`);
+  }
   paneAxisRight(yf, title, unit, ticks) {
     this.text(6, yf(100) - 20, title, "pane soc");
     this.text(6, yf(100) - 9, unit, "lbl unit soc");
@@ -912,6 +1070,8 @@ const STYLE = `
   .chart .socband { fill: var(--ec-soc, #3b82f6); fill-opacity: .05; }
   .chart .past { fill: var(--secondary-text-color); fill-opacity: .07; }
   .chart .now { stroke: var(--primary-color); stroke-width: 2; stroke-dasharray: 4 3; }
+  .chart .temp { fill: var(--ec-temp, #2aa198); }
+  table.dt tr.tot td { font-weight: 600; border-top: 1px solid var(--divider-color); }
   .chart .est { stroke: var(--secondary-text-color); stroke-width: 1; stroke-dasharray: 2 3; }
   .chart .cursor { fill: var(--primary-text-color); fill-opacity: .1; }
   .key { flex-basis: 100%; font-size: 1.03em; color: var(--primary-text-color); }

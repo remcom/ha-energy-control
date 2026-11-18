@@ -96,6 +96,8 @@ class SlotPlan:
     price_estimated: bool = False
     hp_mode: str | None = None  # planned heat pump SG Ready state
     ev_kw: float = 0.0  # planned EV charging power
+    hp_kw: float = 0.0  # expected heat pump power under the schedule (part of load_kw)
+    outdoor_c: float | None = None  # expected outdoor temperature
 
     def as_dict(self) -> dict[str, Any]:
         """Serialize to JSON-friendly dict."""

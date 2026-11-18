@@ -74,6 +74,12 @@ def build_payload(data: EnergyControlData, history_hours: float) -> dict[str, An
         "coverage_today": data.history.coverage_since(dt_util.start_of_local_day()),
         "pending_restores": controller.pending_restores,
         "price_estimate_source": coordinator.price_estimate_source,
+        "accuracy": {
+            "pv": data.history.forecast_accuracy(dt_util.utcnow(), "pv"),
+            "load": data.history.forecast_accuracy(dt_util.utcnow(), "load"),
+        },
+        "has_heat_pump": coordinator.flex.hp_configured,
+        "has_ev": coordinator.flex.ev_configured,
         "planned_cost_today": round(data.history.planned_cost_since(dt_util.start_of_local_day()), 3),
     }
 

@@ -34,6 +34,8 @@ class _Accumulator:
     pv_ws: float = 0.0
     load_samples: float = 0.0
     pv_samples: float = 0.0
+    hp_ws: float = 0.0
+    hp_samples: float = 0.0
     meter_based: bool = False
     last: datetime | None = None
 
@@ -46,7 +48,7 @@ class History:
         self._store: Store[list[dict[str, Any]]] = Store(hass, 1, f"{DOMAIN}.{entry_id}.history")
         self.records: list[dict[str, Any]] = []
         self._acc: _Accumulator | None = None
-        self._previous: tuple[float | None, ...] = (None, None, None, None)
+        self._previous: tuple[float | None, ...] = (None, None, None, None, None)
         self._previous_meters: tuple[float | None, float | None] = (None, None)
         self._last_sample: datetime | None = None
 
@@ -75,13 +77,14 @@ class History:
         import_kwh: float | None = None,
         export_kwh: float | None = None,
         meters_configured: bool = False,
+        hp_w: float | None = None,
     ) -> dict[str, Any] | None:
         """Add a measurement; returns the closed record when a slot ends."""
         closed = None
         # Keep malformed measurements out of accounting, even for direct callers.
-        grid_w, battery_w, load_w, pv_w, import_kwh, export_kwh = (
+        grid_w, battery_w, load_w, pv_w, import_kwh, export_kwh, hp_w = (
             value if value is not None and isfinite(value) else None
-            for value in (grid_w, battery_w, load_w, pv_w, import_kwh, export_kwh)
+            for value in (grid_w, battery_w, load_w, pv_w, import_kwh, export_kwh, hp_w)
         )
         meter_w = None
         elapsed = (now - self._last_sample).total_seconds() if self._last_sample else 0
@@ -98,7 +101,7 @@ class History:
                 meter_w = ((import_kwh - old_import) * 3600000 / elapsed, (export_kwh - old_export) * 3600000 / elapsed)
         self._previous_meters = (import_kwh, export_kwh)
         self._last_sample = now
-        current = (grid_w, battery_w, load_w, pv_w)
+        current = (grid_w, battery_w, load_w, pv_w, hp_w)
         values = tuple(old if new is not None else None for old, new in zip(self._previous, current, strict=True))
         slot_start = floor_slot(now)
         continuous_boundary = False
@@ -141,7 +144,7 @@ class History:
     ) -> None:
         if seconds <= 0:
             return
-        grid, battery, load, pv = values
+        grid, battery, load, pv, hp = values
         acc.seconds += seconds
         if meters_configured:
             if meter_w is not None:
@@ -164,6 +167,9 @@ class History:
         if pv is not None:
             acc.pv_ws += max(pv, 0.0) * seconds
             acc.pv_samples += seconds
+        if hp is not None:
+            acc.hp_ws += max(hp, 0.0) * seconds
+            acc.hp_samples += seconds
 
     def _close(self, acc: _Accumulator) -> dict[str, Any]:
         planned = acc.planned or {}
@@ -196,6 +202,7 @@ class History:
             ),
             "actual_load_kw": _round(acc.load_ws / acc.load_samples / 1000 if acc.load_samples else None),
             "actual_pv_kw": _round(acc.pv_ws / acc.pv_samples / 1000 if acc.pv_samples else None),
+            "actual_hp_kw": _round(acc.hp_ws / acc.hp_samples / 1000 if acc.hp_samples >= 450 else None),
             "load_coverage": round(acc.load_samples / (SLOT_MINUTES * 60), 4),
             "pv_coverage": round(acc.pv_samples / (SLOT_MINUTES * 60), 4),
             "load_error_kw": _round(
@@ -329,6 +336,8 @@ def _planned_snapshot(slot: SlotPlan | None) -> dict[str, Any] | None:
         "grid_kw": round(slot.grid_kw, 3),
         "load_kw": round(slot.load_kw, 3),
         "pv_kw": round(slot.pv_kw, 3),
+        "hp_kw": round(slot.hp_kw, 3),
+        "ev_kw": round(slot.ev_kw, 3),
         "pv_forecast_kw": None if slot.pv_forecast_kw is None else round(slot.pv_forecast_kw, 3),
         "load_forecast_kw": None if slot.load_forecast_kw is None else round(slot.load_forecast_kw, 3),
         "export_price_known": slot.export_price_known,
