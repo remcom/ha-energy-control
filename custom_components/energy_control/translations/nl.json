@@ -3,7 +3,7 @@
     "step": {
       "prices": {
         "title": "Stroomprijzen",
-        "description": "Kies een prijssensor met prognoses, of de core Nord Pool-integratie en een marktgebied. Nord Pool levert spotprijzen in EUR; vul opslag, energiebelasting en btw in. Salderen schakelt op de einddatum naar spotvergoeding. Daarvoor is een ruwe spotprijs nodig; een all-in inkoopprijs is geen terugleverprijs.",
+        "description": "Kies een prijsvoorspellingssensor, of een core Nord Pool-integratie en marktgebied. Native Nord Pool gebruikt EUR-spotprijzen; stel opslag, energiebelasting en btw in. Salderen gaat op de einddatum over op spotvergoeding. Spot-teruglevering vereist een losse energiecomponent of een bron die expliciet als spot-only is ingesteld. Voordat de prijzen van morgen bekend zijn (rond 13:00) gebruikt de planning geschatte prijzen tot 36 uur vooruit: uit een optionele externe prijsvoorspelling (gekalibreerd op de gepubliceerde prijzen), anders uit een ingebouwd model dat leert van eerdere prijzen, je zonnevoorspelling en de windverwachting van de weer-entiteit. Schattingen sturen alleen de planning; er wordt nooit op gehandeld.",
         "data": {
           "price_entity": "Prijsverwachting-sensor",
           "price_includes_taxes": "Prijzen inclusief belastingen",
@@ -16,7 +16,9 @@
           "export_fee": "Terugleverkosten (afgetrokken)",
           "export_fixed": "Vaste terugleverprijs",
           "nordpool_entry": "Nord Pool-integratie (optioneel)",
-          "nordpool_area": "Nord Pool-marktgebied (bijv. NL)"
+          "nordpool_area": "Nord Pool-marktgebied (bijv. NL)",
+          "weather_entity": "Weer (windverwachting voor prijsschattingen)",
+          "price_forecast_entity": "Externe prijsvoorspellingssensor (optioneel)"
         }
       },
       "pv": {
@@ -95,7 +97,7 @@
       },
       "prices": {
         "title": "Stroomprijzen",
-        "description": "Kies een prijssensor met prognoses, of de core Nord Pool-integratie en een marktgebied. Nord Pool levert spotprijzen in EUR; vul opslag, energiebelasting en btw in. Salderen schakelt op de einddatum naar spotvergoeding. Daarvoor is een ruwe spotprijs nodig; een all-in inkoopprijs is geen terugleverprijs.",
+        "description": "Kies een prijsvoorspellingssensor, of een core Nord Pool-integratie en marktgebied. Native Nord Pool gebruikt EUR-spotprijzen; stel opslag, energiebelasting en btw in. Salderen gaat op de einddatum over op spotvergoeding. Spot-teruglevering vereist een losse energiecomponent of een bron die expliciet als spot-only is ingesteld. Voordat de prijzen van morgen bekend zijn (rond 13:00) gebruikt de planning geschatte prijzen tot 36 uur vooruit: uit een optionele externe prijsvoorspelling (gekalibreerd op de gepubliceerde prijzen), anders uit een ingebouwd model dat leert van eerdere prijzen, je zonnevoorspelling en de windverwachting van de weer-entiteit. Schattingen sturen alleen de planning; er wordt nooit op gehandeld.",
         "data": {
           "price_entity": "Prijsverwachting-sensor",
           "price_includes_taxes": "Prijzen inclusief belastingen",
@@ -108,7 +110,9 @@
           "export_fee": "Terugleverkosten (afgetrokken)",
           "export_fixed": "Vaste terugleverprijs",
           "nordpool_entry": "Nord Pool-integratie (optioneel)",
-          "nordpool_area": "Nord Pool-marktgebied (bijv. NL)"
+          "nordpool_area": "Nord Pool-marktgebied (bijv. NL)",
+          "weather_entity": "Weer (windverwachting voor prijsschattingen)",
+          "price_forecast_entity": "Externe prijsvoorspellingssensor (optioneel)"
         }
       },
       "pv": {
@@ -226,6 +230,9 @@
       },
       "curtail_negative": {
         "name": "PV afknijpen bij negatieve prijs"
+      },
+      "price_estimates": {
+        "name": "Plannen met geschatte prijzen"
       }
     },
     "number": {

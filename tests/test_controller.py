@@ -525,3 +525,34 @@ async def test_cheapest_window_service(hass: HomeAssistant, entry, setup) -> Non
         await hass.services.async_call(
             DOMAIN, "cheapest_window", {"duration": {"hours": 200}}, blocking=True, return_response=True
         )
+
+
+async def test_estimated_price_slot_falls_back_to_self_consumption(hass: HomeAssistant, entry, setup) -> None:
+    controller = entry.runtime_data.controller
+    coordinator = entry.runtime_data.coordinator
+    plan = coordinator.data
+    plan.slots[0].price_estimated = True
+    await coordinator.async_set_setting("mode", "auto")
+    coordinator.async_set_updated_data(plan)
+    action, slot, status = controller._propose(dt_util.utcnow())
+    assert (action, slot, status) == (Action.SELF_CONSUME, None, "fallback_estimated_price")
+
+
+async def test_built_in_estimates_extend_the_plan(hass: HomeAssistant, entry, setup) -> None:
+    coordinator = entry.runtime_data.coordinator
+    archive = coordinator.price_archive
+    now = dt_util.utcnow()
+    start = now.replace(minute=0, second=0, microsecond=0) - timedelta(days=5)
+    for i in range(5 * 96):
+        when = start + timedelta(minutes=15 * i)
+        hour = when.hour
+        archive.prices[when.isoformat()] = (0.20 + (0.15 if 16 <= hour < 20 else 0.0), None)
+    await coordinator.async_refresh()
+    plan = coordinator.data
+    assert coordinator.price_estimate_source == "built_in"
+    assert plan.estimated_from is not None
+    assert plan.slots[-1].start >= now + timedelta(hours=35)
+
+    await coordinator.async_set_setting("price_estimates", False)
+    await coordinator.async_refresh()
+    assert coordinator.data.estimated_from is None

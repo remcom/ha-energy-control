@@ -127,6 +127,11 @@ class Plan:
         return all(slot.export_price_known for slot in self.slots)
 
     @property
+    def estimated_from(self) -> datetime | None:
+        """Start of the first quarter with an estimated price."""
+        return next((slot.start for slot in self.slots if slot.price_estimated), None)
+
+    @property
     def feasible(self) -> bool:
         """Whether all configured grid limits are satisfied."""
         return all(slot.grid_violation_kw < 1e-6 for slot in self.slots)
@@ -145,6 +150,7 @@ class Plan:
         """Serialize to JSON-friendly dict."""
         return {
             "created": self.created.isoformat(),
+            "estimated_from": self.estimated_from.isoformat() if self.estimated_from else None,
             "feasible": self.feasible,
             "export_prices_complete": self.export_prices_complete,
             "total_cost": round(self.total_cost, 4) if self.export_prices_complete else None,

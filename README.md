@@ -75,6 +75,30 @@ a source with raw energy prices, or an explicitly spot-only source. Unknown expo
 battery export for those intervals; incomplete plan costs and savings are hidden, with
 `export_prices_complete: false` exposed in the API. No supplier-specific tax reversal is assumed.
 
+### Price estimates beyond the published prices
+
+Tomorrow's day-ahead prices are published around 13:00. Before that, a plan would end at midnight
+and could not see tomorrow's morning peak, so it would undervalue energy kept in the battery
+overnight. The plan therefore always looks 36 hours ahead, filling the gap with **estimated** prices
+(switch *Plan with estimated prices*, on by default):
+
+1. **External forecast** (optional *External price forecast sensor*), for example
+   [energyforecast.de](https://energyforecast.de) through the EPEX Spot integration. Its values are
+   calibrated against the published prices: fitted directly on the overlap, otherwise treated as a
+   spot price and converted with your supplier's own spot → all-in relation.
+2. **Built-in model**, learned from an archive of published prices (35 days, seeded from the price
+   sensor's recorder history on first start):
+   `price = typical price for this quarter (weekday/weekend, recency weighted)
+   + persistence of the last 24 h's deviation + solar effect + wind effect`.
+   Solar uses your own PV forecast as a proxy for national solar output; wind uses the hourly
+   forecast of the selected *weather* entity. Coefficients start at sensible priors and are learned
+   with ridge regression as the archive grows; estimates are clamped to the observed price range.
+
+Estimates only steer the plan (mainly how much energy to keep for later). They are faded in the
+chart (“≈ estimated prices”), excluded from reported plan cost and savings, and **never executed**:
+if a published price is still missing when an estimated quarter starts, the controller falls back
+to plain self consumption.
+
 ### Measured cost and forecast quality
 
 History records sampled seconds, coverage, observed import/export energy, and observed costs.

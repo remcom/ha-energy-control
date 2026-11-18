@@ -73,6 +73,7 @@ def build_payload(data: EnergyControlData, history_hours: float) -> dict[str, An
         "observed_cost_today": data.history.observed_cost_since(dt_util.start_of_local_day()),
         "coverage_today": data.history.coverage_since(dt_util.start_of_local_day()),
         "pending_restores": controller.pending_restores,
+        "price_estimate_source": coordinator.price_estimate_source,
         "planned_cost_today": round(data.history.planned_cost_since(dt_util.start_of_local_day()), 3),
     }
 

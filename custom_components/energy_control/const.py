@@ -23,6 +23,8 @@ CONF_NETTING_END: Final = "netting_end"
 CONF_EXPORT_FACTOR: Final = "export_factor"
 CONF_EXPORT_FEE: Final = "export_fee"
 CONF_EXPORT_FIXED: Final = "export_fixed"
+CONF_PRICE_FORECAST_ENTITY: Final = "price_forecast_entity"  # optional external prediction
+CONF_WEATHER_ENTITY: Final = "weather_entity"  # wind for the built-in price estimate
 # PV
 CONF_PV_ENTITIES: Final = "pv_entities"
 CONF_PV_ESTIMATE: Final = "pv_estimate"
@@ -94,6 +96,7 @@ SET_MIN_SOC: Final = "min_soc"
 SET_MAX_SOC: Final = "max_soc"
 SET_CYCLE_COST: Final = "cycle_cost"  # ct/kWh discharged
 SET_ARBITRAGE_MARGIN: Final = "arbitrage_margin"  # ct/kWh
+SET_PRICE_ESTIMATES: Final = "price_estimates"  # plan beyond published prices
 
 
 class Mode(StrEnum):
@@ -125,10 +128,12 @@ DEFAULT_SETTINGS: Final[dict[str, object]] = {
     SET_MAX_SOC: 100.0,
     SET_CYCLE_COST: 2.0,
     SET_ARBITRAGE_MARGIN: 1.0,
+    SET_PRICE_ESTIMATES: True,
 }
 
 # --- Timing ------------------------------------------------------------------
 HORIZON_HOURS: Final = 48
+PRICE_ESTIMATE_HOURS: Final = 36  # with estimates the plan always sees this far ahead
 CONTROL_INTERVAL_S: Final = 10
 STALE_PLAN_MINUTES: Final = 20  # four missed replans: fall back to hold
 REPLAN_MINUTES: Final = 5  # periodic replan with live SoC

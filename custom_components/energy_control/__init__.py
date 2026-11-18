@@ -94,5 +94,5 @@ async def async_unload_entry(hass: HomeAssistant, entry: EnergyControlConfigEntr
 
 async def async_remove_entry(hass: HomeAssistant, entry: EnergyControlConfigEntry) -> None:
     """Delete the entry's stores (control was already released on unload)."""
-    for suffix in ("settings", "history", "originals", "pending_restores"):
+    for suffix in ("settings", "history", "originals", "pending_restores", "price_archive"):
         await Store(hass, 1, f"{DOMAIN}.{entry.entry_id}.{suffix}").async_remove()

@@ -9,11 +9,11 @@ from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .const import SET_BATTERY_TO_GRID, SET_CURTAIL_NEGATIVE, SET_GRID_CHARGE
+from .const import SET_BATTERY_TO_GRID, SET_CURTAIL_NEGATIVE, SET_GRID_CHARGE, SET_PRICE_ESTIMATES
 from .data import EnergyControlConfigEntry, EnergyControlData
 from .entity import EnergyControlEntity
 
-SWITCHES = (SET_GRID_CHARGE, SET_BATTERY_TO_GRID, SET_CURTAIL_NEGATIVE)
+SWITCHES = (SET_GRID_CHARGE, SET_BATTERY_TO_GRID, SET_CURTAIL_NEGATIVE, SET_PRICE_ESTIMATES)
 
 
 async def async_setup_entry(

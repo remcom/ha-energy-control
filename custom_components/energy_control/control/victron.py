@@ -392,6 +392,10 @@ class VictronController:
         slot = plan.slot_at(now)
         if slot is None:
             return Action.HOLD, None, "fallback_no_slot"
+        if slot.price_estimated:
+            # Published prices did not arrive: plain self consumption is the
+            # safe default, never an arbitrage bet on a prediction.
+            return Action.SELF_CONSUME, None, "fallback_estimated_price"
         if slot.grid_violation_kw > 1e-6:
             return slot.action, slot, "grid_constraint_violation"
         return slot.action, slot, "ok"

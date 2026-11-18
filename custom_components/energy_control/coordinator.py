@@ -38,17 +38,20 @@ from .const import (
     CONF_NORDPOOL_AREA,
     CONF_NORDPOOL_ENTRY,
     CONF_PRICE_ENTITY,
+    CONF_PRICE_FORECAST_ENTITY,
     CONF_PRICE_INCLUDES_TAXES,
     CONF_PV_ENTITIES,
     CONF_PV_ESTIMATE,
     CONF_PV_SCALE,
     CONF_SOC_ENTITY,
     CONF_VAT,
+    CONF_WEATHER_ENTITY,
     DEFAULT_SETTINGS,
     DEFAULTS,
     DOMAIN,
     HORIZON_HOURS,
     LOAD_PROFILE_REFRESH_H,
+    PRICE_ESTIMATE_HOURS,
     REPLAN_MINUTES,
     SET_ARBITRAGE_MARGIN,
     SET_BATTERY_TO_GRID,
@@ -58,11 +61,14 @@ from .const import (
     SET_MAX_SOC,
     SET_MIN_SOC,
     SET_MODE,
+    SET_PRICE_ESTIMATES,
     Mode,
 )
 from .optimizer import Action, BatteryParams, GridParams, Plan, Strategy, optimize
+from .price_archive import PriceArchive
 from .providers.load import LoadProfile, build_load_profile
 from .providers.nordpool import NordPoolForecast
+from .providers.price_forecast import PriceEstimator, calibrate_external, spot_relation, with_spot
 from .providers.prices import ExportMode, PriceModel, PricePoint, parse_price_attributes
 from .providers.slots import Corrections, apply_corrections, build_slots
 from .providers.solar import EnergyInterval, parse_pv_attributes
@@ -102,6 +108,14 @@ def state_float(hass: HomeAssistant, entity_id: str | None) -> float | None:
     return value
 
 
+def _estimate(
+    observations: list[Any], weather: dict[datetime, Any], tz: Any, now: datetime, start: datetime, end: datetime
+) -> list[PricePoint]:
+    """Fit and run the built-in price model (CPU work, runs in the executor)."""
+    estimator = PriceEstimator(observations, weather, tz, now)
+    return estimator.estimate(start, end, []) if estimator.usable else []
+
+
 class EnergyControlCoordinator(DataUpdateCoordinator[Plan]):
     """Plans the battery schedule every slot and on input changes."""
 
@@ -136,10 +150,14 @@ class EnergyControlCoordinator(DataUpdateCoordinator[Plan]):
         self.soc_pct: float | None = None
         self.last_plan_error: str | None = None
         self.corrections = Corrections()
+        self.price_archive = PriceArchive(hass, entry.entry_id)
+        self.published: list[PricePoint] = []  # prices without estimates
+        self.price_estimate_source: str | None = None
 
     # --- lifecycle ---------------------------------------------------------
     async def async_setup(self) -> None:
         """Load persisted settings and start listeners."""
+        await self.price_archive.async_load()
         stored = await self._settings_store.async_load()
         if stored:
             self.settings.update({k: v for k, v in stored.items() if k in DEFAULT_SETTINGS})
@@ -337,6 +355,55 @@ class EnergyControlCoordinator(DataUpdateCoordinator[Plan]):
         _LOGGER.debug("Load profile from %d hourly samples of %s", len(samples), entity_id)
         return build_load_profile(samples, tz, fallback_kw=fallback)
 
+    async def _async_price_estimates(self, now: datetime, tz: Any) -> list[PricePoint]:
+        """Estimated quarters between the published prices and the estimate horizon."""
+        archive = self.price_archive
+        archive.add_published(self.published, now)
+        await archive.async_update_weather(self.config.get(CONF_WEATHER_ENTITY), self.pv, now)
+        if not self.nordpool and self.config.get(CONF_PRICE_ENTITY):
+            await archive.async_bootstrap(self.config[CONF_PRICE_ENTITY], now)
+        self.price_estimate_source = None
+        if not self.settings.get(SET_PRICE_ESTIMATES, True) or not self.published:
+            return []
+        start = self.published[-1].end
+        end = now + timedelta(hours=PRICE_ESTIMATE_HOURS)
+        if start >= end:
+            return []
+        relation = spot_relation(self.published)
+        estimates: list[PricePoint] = []
+        external_entity = self.config.get(CONF_PRICE_FORECAST_ENTITY)
+        if external_entity and (state := self.hass.states.get(external_entity)) is not None:
+            try:
+                external = parse_price_attributes(state.attributes, state.attributes.get("unit_of_measurement"))
+            except ValueError as err:
+                _LOGGER.debug("Unusable price forecast %s: %s", external_entity, err)
+                external = []
+            convert = calibrate_external(external, self.published)
+            for point in external:
+                when = max(point.start, start)
+                while when < min(point.end, end):
+                    estimates.append(PricePoint(when, 15, convert(point.price), None, estimated=True))
+                    when += timedelta(minutes=15)
+            if estimates:
+                self.price_estimate_source = "external"
+        covered = estimates[-1].end if estimates else start
+        if covered < end:
+            built_in = await self.hass.async_add_executor_job(
+                _estimate, archive.observations(), archive.weather_map(), tz, now, covered, end
+            )
+            if built_in:
+                estimates.extend(built_in)
+                self.price_estimate_source = self.price_estimate_source or "built_in"
+        # Contiguous quarters only: build_slots stops at a gap.
+        result: list[PricePoint] = []
+        expected = start
+        for point in sorted(estimates, key=lambda p: p.start):
+            if point.start != expected:
+                break
+            result.append(point)
+            expected = point.end
+        return with_spot(result, relation)
+
     # --- update ------------------------------------------------------------
     async def _async_update_data(self) -> Plan:
         now = dt_util.utcnow()
@@ -351,13 +418,16 @@ class EnergyControlCoordinator(DataUpdateCoordinator[Plan]):
             self.last_plan_error = "no_prices"
             raise UpdateFailed("No usable price forecast from the configured source")
 
+        self.published = self.prices
+        self.pv = self._read_pv()
+        self.prices = [*self.published, *await self._async_price_estimates(now, tz)]
+
         soc, reason = soc_reading(self.hass, self.config[CONF_SOC_ENTITY], now)
         if soc is None:
             self.last_plan_error = reason
             raise UpdateFailed(f"SoC unavailable: {self.config[CONF_SOC_ENTITY]}")
         self.soc_pct = soc
 
-        self.pv = self._read_pv()
         load = await self._async_load_profile(now)
         slots = build_slots(
             now,
@@ -383,7 +453,7 @@ class EnergyControlCoordinator(DataUpdateCoordinator[Plan]):
             )
             slots = apply_corrections(slots, now, self.corrections)
         model = self.price_model()
-        missing_spot = model.includes_taxes and any(p.spot is None for p in self.prices)
+        missing_spot = model.includes_taxes and any(p.spot is None for p in self.published)
         transition_soon = model.netting_end and model.netting_end <= now.astimezone(tz).date() + timedelta(days=60)
         warn = missing_spot and (
             model.export_mode == ExportMode.SPOT or (model.export_mode == ExportMode.NETTING and transition_soon)

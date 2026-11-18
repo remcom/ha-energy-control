@@ -3,7 +3,7 @@
     "step": {
       "prices": {
         "title": "Electricity prices",
-        "description": "Choose a forecast sensor, or a core Nord Pool integration and market area. Native Nord Pool uses EUR spot prices; configure markup, energy tax and VAT. Netting switches to spot compensation on its end date. Spot export requires a raw energy component or a source explicitly configured as spot-only.",
+        "description": "Choose a forecast sensor, or a core Nord Pool integration and market area. Native Nord Pool uses EUR spot prices; configure markup, energy tax and VAT. Netting switches to spot compensation on its end date. Spot export requires a raw energy component or a source explicitly configured as spot-only. Before tomorrow's prices are published (around 13:00) the plan uses estimated prices up to 36 h ahead: from an optional external price forecast sensor (calibrated against the published prices), otherwise from a built-in model that learns from past prices, your solar forecast and the wind forecast of the weather entity. Estimates only steer the plan; they are never executed.",
         "data": {
           "price_entity": "Price forecast sensor",
           "price_includes_taxes": "Prices include taxes and fees",
@@ -16,7 +16,9 @@
           "export_fee": "Export fee (subtracted)",
           "export_fixed": "Fixed export price",
           "nordpool_entry": "Core Nord Pool integration (optional)",
-          "nordpool_area": "Nord Pool market area (e.g. NL)"
+          "nordpool_area": "Nord Pool market area (e.g. NL)",
+          "weather_entity": "Weather (wind forecast for price estimates)",
+          "price_forecast_entity": "External price forecast sensor (optional)"
         }
       },
       "pv": {
@@ -95,7 +97,7 @@
       },
       "prices": {
         "title": "Electricity prices",
-        "description": "Choose a forecast sensor, or a core Nord Pool integration and market area. Native Nord Pool uses EUR spot prices; configure markup, energy tax and VAT. Netting switches to spot compensation on its end date. Spot export requires a raw energy component or a source explicitly configured as spot-only.",
+        "description": "Choose a forecast sensor, or a core Nord Pool integration and market area. Native Nord Pool uses EUR spot prices; configure markup, energy tax and VAT. Netting switches to spot compensation on its end date. Spot export requires a raw energy component or a source explicitly configured as spot-only. Before tomorrow's prices are published (around 13:00) the plan uses estimated prices up to 36 h ahead: from an optional external price forecast sensor (calibrated against the published prices), otherwise from a built-in model that learns from past prices, your solar forecast and the wind forecast of the weather entity. Estimates only steer the plan; they are never executed.",
         "data": {
           "price_entity": "Price forecast sensor",
           "price_includes_taxes": "Prices include taxes and fees",
@@ -108,7 +110,9 @@
           "export_fee": "Export fee (subtracted)",
           "export_fixed": "Fixed export price",
           "nordpool_entry": "Core Nord Pool integration (optional)",
-          "nordpool_area": "Nord Pool market area (e.g. NL)"
+          "nordpool_area": "Nord Pool market area (e.g. NL)",
+          "weather_entity": "Weather (wind forecast for price estimates)",
+          "price_forecast_entity": "External price forecast sensor (optional)"
         }
       },
       "pv": {
@@ -226,6 +230,9 @@
       },
       "curtail_negative": {
         "name": "Curtail PV at negative prices"
+      },
+      "price_estimates": {
+        "name": "Plan with estimated prices"
       }
     },
     "number": {

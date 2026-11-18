@@ -45,6 +45,7 @@ from .const import (
     CONF_NORDPOOL_AREA,
     CONF_NORDPOOL_ENTRY,
     CONF_PRICE_ENTITY,
+    CONF_PRICE_FORECAST_ENTITY,
     CONF_PRICE_INCLUDES_TAXES,
     CONF_PV_ENTITIES,
     CONF_PV_ESTIMATE,
@@ -57,6 +58,7 @@ from .const import (
     CONF_SETPOINT_ENTITY,
     CONF_SOC_ENTITY,
     CONF_VAT,
+    CONF_WEATHER_ENTITY,
     DEFAULTS,
     DOMAIN,
     NAME,
@@ -171,6 +173,8 @@ def step_schema(step: str, values: dict[str, Any]) -> vol.Schema:
                 _req(CONF_EXPORT_FACTOR, values): _num(0, 2, 0.01),
                 _req(CONF_EXPORT_FEE, values): _num(-1, 1, "any", "EUR/kWh"),
                 _req(CONF_EXPORT_FIXED, values): _num(-1, 1, "any", "EUR/kWh"),
+                _opt(CONF_WEATHER_ENTITY, values): _entity("weather"),
+                _opt(CONF_PRICE_FORECAST_ENTITY, values): _entity("sensor"),
             }
         )
     if step == "pv":

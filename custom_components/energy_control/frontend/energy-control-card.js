@@ -2,7 +2,7 @@
  * Energy Control card — plan timeline, planned vs actual, summary.
  * Dependency-free web component; data via websocket `energy_control/subscribe`.
  */
-const CARD_VERSION = "0.3.1";
+const CARD_VERSION = "0.4.0";
 
 // What the battery does in a slot: the plan action, with self consumption
 // split by direction so "battery covers the house" is visible at a glance.
@@ -326,7 +326,7 @@ class EnergyControlCard extends HTMLElement {
     const pY = 44, pH = 110;
     const priceRows = [
       ...past.filter((r) => r.import_price != null).map((r) => ({ t: r.t, t1: r.t1, p: r.import_price * 100, kind: r.kind ?? "idle", past: true })),
-      ...future.map((s) => ({ t: s.t, t1: s.t1, p: s.import_price * 100, kind: s.kind, past: false })),
+      ...future.map((s) => ({ t: s.t, t1: s.t1, p: s.import_price * 100, kind: s.kind, past: false, est: s.price_estimated })),
     ];
     // Always the real 15-minute prices; narrow bars are drawn without gaps.
     const bars = priceRows;
@@ -338,9 +338,16 @@ class EnergyControlCard extends HTMLElement {
     for (const r of bars) {
       const w = x(r.t1) - x(r.t);
       const gap = w > 4 ? 1 : 0;
-      g.rect(x(r.t) + gap / 2, Math.min(py(r.p), py(0)), Math.max(0.5, w - gap), Math.abs(py(r.p) - py(0)), KINDS[r.kind].color, r.past ? 0.4 : 0.9);
+      g.rect(x(r.t) + gap / 2, Math.min(py(r.p), py(0)), Math.max(0.5, w - gap), Math.abs(py(r.p) - py(0)), KINDS[r.kind].color, r.past ? 0.4 : r.est ? 0.25 : 0.9);
     }
-    const ahead = bars.filter((r) => !r.past).sort((u, v) => u.p - v.p);
+    // Estimated prices: faded bars and a label where they begin.
+    const firstEst = bars.find((r) => r.est);
+    if (firstEst) {
+      g.vline(x(firstEst.t), pY, pY + pH, "est");
+      g.text(x(firstEst.t) + 4, pY + 10, "≈ estimated prices", "era");
+    }
+    // Cheapest/most expensive markers only on published prices.
+    const ahead = bars.filter((r) => !r.past && !r.est).sort((u, v) => u.p - v.p);
     if (ahead.length > 6) {
       const mark = (r, cls, sym) => g.text((x(r.t) + x(r.t1)) / 2, Math.min(py(r.p), py(0)) - 3, sym, `mark ${cls}`, "middle");
       // Three extremes at least an hour apart, so adjacent quarters do not stack.
@@ -448,7 +455,7 @@ class EnergyControlCard extends HTMLElement {
         <span>Battery <b>${kwS(s.battery_kw)}</b></span><span>Grid <b>${kwS(s.grid_kw)}</b></span>
         <span>PV <b>${kwS(s.pv_kw)}</b></span><span>Load <b>${kwS(s.load_kw)}</b></span>
         <span>SoC <b>→ ${s.soc_end_pct.toFixed(0)}%</b></span>
-        <span>Price <b>${ct(s.import_price)}</b> <span class="muted">export ${s.export_price_known === false ? "unknown" : ct(s.export_price)}</span></span>
+        <span>Price <b>${s.price_estimated ? "≈ " : ""}${ct(s.import_price)}</b> <span class="muted">${s.price_estimated ? "estimated · " : ""}export ${s.export_price_known === false ? "unknown" : ct(s.export_price)}</span></span>
         ${s.curtail_kw > 0 ? `<span>Curtail <b>${kwS(s.curtail_kw)}</b></span>` : ""}
         ${s.reason ? `<div class="r">${esc(s.reason)}</div>` : ""}`,
     };
@@ -544,6 +551,7 @@ class EnergyControlCard extends HTMLElement {
         "Checks",
         [
           ["Grid constraints", plan?.feasible === false ? `<span class="errtxt">Unavoidable overload — inspect slot reasons</span>` : "Within forecast limits"],
+          ["Price estimates", plan?.estimated_from ? `after ${fmtDay(new Date(plan.estimated_from))} ${fmtTime(new Date(plan.estimated_from))} (${d.price_estimate_source === "external" ? "external forecast" : "built-in model"})` : "not needed"],
           ["Export tariff", plan?.export_prices_complete === false ? `<span class="errtxt">Missing spot price — check Repairs</span>` : "Known"],
           ["Measured coverage today", `${((d.coverage_today ?? 0) * 100).toFixed(0)}%`],
           ["Pending restores", Object.keys(d.pending_restores ?? {}).map(esc).join(", ") || "none"],
@@ -819,6 +827,9 @@ class Svg {
       this.text(px, y, midnight ? fmtDay(d) : `${String(d.getHours()).padStart(2, "0")}:00`, midnight ? "lbl day" : "lbl", "middle");
     }
   }
+  vline(px, y0, y1, cls) {
+    this.parts.push(`<line x1="${px.toFixed(1)}" x2="${px.toFixed(1)}" y1="${y0}" y2="${y1}" class="${cls}"/>`);
+  }
   nowLine(px, y0, y1) {
     this.parts.push(`<rect x="0" y="${y0}" width="${Math.max(0, px).toFixed(1)}" height="${y1 - y0}" class="past"/>`);
     this.parts.push(`<line x1="${px.toFixed(1)}" x2="${px.toFixed(1)}" y1="${y0}" y2="${y1}" class="now"/>`);
@@ -884,6 +895,7 @@ const STYLE = `
   .chart .socband { fill: var(--ec-soc, #3b82f6); fill-opacity: .05; }
   .chart .past { fill: var(--secondary-text-color); fill-opacity: .07; }
   .chart .now { stroke: var(--primary-color); stroke-width: 2; stroke-dasharray: 4 3; }
+  .chart .est { stroke: var(--secondary-text-color); stroke-width: 1; stroke-dasharray: 2 3; }
   .chart .cursor { fill: var(--primary-text-color); fill-opacity: .1; }
   .key { flex-basis: 100%; font-size: 1.03em; color: var(--primary-text-color); }
   .key .act { color: var(--ec-actual, #d6455d); }

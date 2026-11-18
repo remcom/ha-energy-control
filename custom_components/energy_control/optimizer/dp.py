@@ -256,10 +256,13 @@ def optimize(
         delta, flow = selected
         plan.slots.append(_slot_plan(slot, delta, flow, soc, soc + delta, step, battery))
         soc += delta
-    plan.total_cost = sum(slot.cost for slot in plan.slots)
-    plan.wear_cost = sum(slot.wear_cost for slot in plan.slots)
-    plan.baseline_cost = baseline_cost(slots)
-    plan.soc_end_kwh = soc
+    # Reported money covers published prices only: estimated quarters steer
+    # the plan (value of stored energy) but are not a cost forecast.
+    known = [i for i, slot in enumerate(slots) if not slot.price_estimated]
+    plan.total_cost = sum(plan.slots[i].cost for i in known)
+    plan.wear_cost = sum(plan.slots[i].wear_cost for i in known)
+    plan.baseline_cost = baseline_cost([slots[i] for i in known])
+    plan.soc_end_kwh = plan.slots[known[-1]].soc_end_pct * battery.capacity_kwh / 100 if known else battery.soc_kwh
     return plan
 
 
